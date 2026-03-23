@@ -5,8 +5,14 @@ from fastapi.responses import JSONResponse
 from app.api.v1.router import router
 from app.core.config import settings
 from app.schemas.common import ErrorResponse, HealthStatusResponse
+from app.services.db_store import init_db
 
 app = FastAPI(title=settings.APP_NAME, version="0.1.0")
+
+
+@app.on_event("startup")
+def on_startup():
+    init_db()
 
 app.add_middleware(
     CORSMiddleware,
@@ -30,4 +36,4 @@ app.include_router(router)
 @app.get("/health", response_model=HealthStatusResponse)
 async def health():
     llm_status = "connected" if settings.GEMINI_API_KEY else "not_configured"
-    return HealthStatusResponse(status="ok", database="not_configured", llm=llm_status)
+    return HealthStatusResponse(status="ok", database="sqlite", llm=llm_status)

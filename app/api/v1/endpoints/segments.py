@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 
 from app.core.dependencies import get_current_user_id
 from app.schemas.segment import SegmentDistributionItem, SegmentFilterRequest, SegmentKpiResponse
-from app.services.mock_store import store
+from app.services.db_store import store
 
 router = APIRouter(prefix="/segments", tags=["segments"])
 

@@ -9,14 +9,14 @@ from app.schemas.persona import (
     PersonaPoolCreateRequest,
     PersonaResponse,
 )
-from app.services.mock_store import store
+from app.services.db_store import store
 
 router = APIRouter(prefix="/personas", tags=["personas"])
 
 
 @router.post("/pool", response_model=PersonaListResponse, status_code=status.HTTP_201_CREATED)
 async def create_persona_pool(body: PersonaPoolCreateRequest, _: str = Depends(get_current_user_id)):
-    if body.project_id not in store.projects:
+    if not store.get_project(body.project_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
     personas = store.create_persona_pool(body.model_dump())
     return PersonaListResponse(items=[PersonaResponse(**item) for item in personas], page=1, size=len(personas), total=len(personas), view_mode="card")

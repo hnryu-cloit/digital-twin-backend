@@ -4,7 +4,7 @@ from jose import JWTError
 from app.core.dependencies import get_current_user_id
 from app.core.security import create_access_token, create_refresh_token, decode_token, verify_password
 from app.schemas.auth import LoginRequest, LogoutRequest, RefreshTokenRequest, TokenResponse, UserResponse
-from app.services.mock_store import store
+from app.services.db_store import store
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -31,7 +31,7 @@ async def login(body: LoginRequest):
 
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh(body: RefreshTokenRequest):
-    if body.refresh_token in store.revoked_refresh_tokens:
+    if store.is_token_revoked(body.refresh_token):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token revoked.")
 
     try:
@@ -72,5 +72,5 @@ async def logout(
     if payload.get("type") != "refresh" or payload.get("sub") != user_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token subject mismatch.")
 
-    store.revoked_refresh_tokens.add(body.refresh_token)
+    store.revoke_token(body.refresh_token)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

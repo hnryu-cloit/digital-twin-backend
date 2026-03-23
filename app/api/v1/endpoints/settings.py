@@ -7,7 +7,7 @@ from app.schemas.settings import (
     PromptSettingsRequest,
     PromptSettingsResponse,
 )
-from app.services.mock_store import store
+from app.services.db_store import store
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 

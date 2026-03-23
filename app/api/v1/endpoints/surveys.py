@@ -12,14 +12,14 @@ from app.schemas.survey import (
     SurveyQuestionResponse,
     SurveyUpdateWithAiRequest,
 )
-from app.services.mock_store import store
+from app.services.db_store import store
 
 router = APIRouter(prefix="/surveys", tags=["surveys"])
 
 
 @router.post("/generate", response_model=SurveyQuestionListResponse)
 async def generate_survey(body: SurveyGenerateRequest, _: str = Depends(get_current_user_id)):
-    if body.project_id not in store.projects:
+    if not store.get_project(body.project_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
 
     generated = []
@@ -45,7 +45,7 @@ async def create_question(
     _: str = Depends(get_current_user_id),
 ):
     questions = store.list_survey_questions(project_id)
-    if project_id not in store.projects:
+    if not store.get_project(project_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
     question = {
         "id": f"q-{uuid.uuid4().hex[:8]}",

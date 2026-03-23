@@ -13,22 +13,23 @@ from app.schemas.simulation import (
     SimulationControlResponse,
     SimulationProgressResponse,
 )
-from app.services.mock_store import store
+from app.services.db_store import store
 
 router = APIRouter(prefix="/simulations", tags=["simulations"])
 
 
 @router.post("/control", response_model=SimulationControlResponse)
 async def control_simulation(body: SimulationControlRequest, _: str = Depends(get_current_user_id)):
-    if body.project_id not in store.projects:
+    project = store.get_project(body.project_id)
+    if project is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
 
-    simulation = store.simulations.get(body.project_id) or {
+    simulation = store.get_simulation(body.project_id) or {
         "job_id": f"job-{body.project_id}",
         "status": "idle",
         "progress": 0,
         "completed_responses": 0,
-        "target_responses": store.projects[body.project_id]["target_responses"],
+        "target_responses": project["target_responses"],
     }
     if body.action == "start":
         simulation["status"] = "running"
@@ -37,15 +38,20 @@ async def control_simulation(body: SimulationControlRequest, _: str = Depends(ge
         simulation["status"] = "paused"
     else:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Action must be start or stop.")
-    store.simulations[body.project_id] = simulation
-    return SimulationControlResponse(job_id=simulation["job_id"], status=simulation["status"], progress=simulation["progress"])
+
+    store.save_simulation(body.project_id, simulation)
+    return SimulationControlResponse(
+        job_id=simulation["job_id"],
+        status=simulation["status"],
+        progress=simulation["progress"],
+    )
 
 
 @router.get("/progress", response_model=SimulationProgressResponse)
 async def get_progress(project_id: str, _: str = Depends(get_current_user_id)):
-    simulation = store.simulations.get(project_id)
+    simulation = store.get_simulation(project_id)
     if simulation is None:
-        project = store.projects.get(project_id)
+        project = store.get_project(project_id)
         if project is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
         return SimulationProgressResponse(
@@ -55,13 +61,12 @@ async def get_progress(project_id: str, _: str = Depends(get_current_user_id)):
             target_responses=project["target_responses"],
             progress=0,
         )
-
     return SimulationProgressResponse(project_id=project_id, **simulation)
 
 
 @router.get("/feed", response_model=list[ResponseFeedItem])
 async def get_feed(project_id: str, limit: int = Query(default=20, ge=1, le=100), _: str = Depends(get_current_user_id)):
-    return [ResponseFeedItem(**item) for item in store.response_feed.get(project_id, [])[:limit]]
+    return [ResponseFeedItem(**item) for item in store.get_response_feed(project_id, limit)]
 
 
 @router.get("/distribution", response_model=list[ResponseDistributionItem])
@@ -107,13 +112,12 @@ async def get_keywords(project_id: str, _: str = Depends(get_current_user_id)):
 
 @router.get("/cot/{response_id}", response_model=CotResponse)
 async def get_cot(response_id: str, _: str = Depends(get_current_user_id)):
-    for items in store.response_feed.values():
-        for item in items:
-            if item["id"] == response_id:
-                return CotResponse(
-                    response_id=response_id,
-                    integrity_score=item["integrity_score"],
-                    steps=item["cot"],
-                    meta={"persona_name": item["persona_name"], "segment": item["segment"]},
-                )
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Response not found.")
+    item = store.get_response_by_id(response_id)
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Response not found.")
+    return CotResponse(
+        response_id=response_id,
+        integrity_score=item["integrity_score"],
+        steps=item["cot"],
+        meta={"persona_name": item["persona_name"], "segment": item["segment"]},
+    )

@@ -11,14 +11,14 @@ from app.schemas.report import (
     ReportListResponse,
     ReportSummaryResponse,
 )
-from app.services.mock_store import store
+from app.services.db_store import store
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 
 
 @router.post("/generate", response_model=ReportSummaryResponse, status_code=status.HTTP_201_CREATED)
 async def generate_report(body: ReportGenerateRequest, _: str = Depends(get_current_user_id)):
-    if body.project_id not in store.projects:
+    if not store.get_project(body.project_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
     report = store.create_report(body.project_id)
     return ReportSummaryResponse(**{key: report[key] for key in ("id", "project_id", "title", "type", "format", "size", "created_at")})
@@ -32,9 +32,7 @@ async def list_reports(
     search: Optional[str] = None,
     _: str = Depends(get_current_user_id),
 ):
-    items = [report for report in store.reports.values() if report["project_id"] == project_id]
-    if search:
-        items = [item for item in items if search.lower() in item["title"].lower()]
+    items = store.list_reports(project_id, search=search)
     start = (page - 1) * size
     paged_items = items[start : start + size]
     summaries = [
@@ -46,7 +44,7 @@ async def list_reports(
 
 @router.get("/{report_id}", response_model=ReportDetailResponse)
 async def get_report(report_id: str, _: str = Depends(get_current_user_id)):
-    report = store.reports.get(report_id)
+    report = store.get_report(report_id)
     if report is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found.")
     return ReportDetailResponse(**report)
@@ -54,7 +52,7 @@ async def get_report(report_id: str, _: str = Depends(get_current_user_id)):
 
 @router.get("/{report_id}/download", response_model=ReportDownloadResponse)
 async def download_report(report_id: str, format: str = Query(default="pdf"), _: str = Depends(get_current_user_id)):
-    if report_id not in store.reports:
+    if not store.get_report(report_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found.")
     return ReportDownloadResponse(
         report_id=report_id,

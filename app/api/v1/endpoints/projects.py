@@ -8,7 +8,7 @@ from app.schemas.project import (
     ProjectSummaryResponse,
     ProjectUpdateRequest,
 )
-from app.services.mock_store import store
+from app.services.db_store import store
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
