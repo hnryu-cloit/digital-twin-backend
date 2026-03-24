@@ -17,6 +17,7 @@ from app.services.db_models import (
     ProjectModel,
     ReportModel,
     RevokedTokenModel,
+    SettingModel,
     SimulationModel,
     SimulationResponseModel,
     SurveyQuestionModel,
@@ -313,6 +314,149 @@ class DbStore:
         with SessionLocal() as session:
             r = session.query(SimulationResponseModel).filter_by(id=response_id).first()
             return r.to_dict() if r else None
+
+    def get_response_distribution(self, project_id: str, question_id: str) -> list[dict]:
+        with SessionLocal() as session:
+            responses = (
+                session.query(SimulationResponseModel)
+                .filter_by(project_id=project_id, question_id=question_id)
+                .all()
+            )
+            if not responses:
+                return []
+            counts: dict[str, int] = {}
+            for r in responses:
+                option = r.selected_option or ""
+                counts[option] = counts.get(option, 0) + 1
+            total = sum(counts.values())
+            return [
+                {"label": option, "value": round(count / total * 100, 1)}
+                for option, count in counts.items()
+            ]
+
+    def get_response_keywords(self, project_id: str, limit: int = 9) -> list[dict]:
+        import re
+        STOPWORDS = {
+            "이", "가", "은", "는", "을", "를", "에", "의", "과", "와", "도", "로", "으로",
+            "에서", "합니다", "있습니다", "있다", "하는", "하고", "것", "더", "한", "이다",
+            "들", "수", "그",
+        }
+        with SessionLocal() as session:
+            responses = (
+                session.query(SimulationResponseModel)
+                .filter_by(project_id=project_id)
+                .all()
+            )
+            if not responses:
+                return []
+            freq: dict[str, int] = {}
+            for r in responses:
+                texts = []
+                if r.rationale:
+                    texts.append(r.rationale)
+                cot_list = r.cot or []
+                for step in cot_list:
+                    if isinstance(step, str):
+                        texts.append(step)
+                combined = " ".join(texts)
+                words = re.findall(r"[가-힣]{2,}", combined)
+                for word in words:
+                    if word not in STOPWORDS:
+                        freq[word] = freq.get(word, 0) + 1
+            if not freq:
+                return []
+            sorted_words = sorted(freq.items(), key=lambda x: x[1], reverse=True)[:limit]
+            max_freq = sorted_words[0][1] if sorted_words else 1
+            n = len(sorted_words)
+            top_third = n // 3
+            bottom_third = n - n // 3
+            result = []
+            for i, (word, count) in enumerate(sorted_words):
+                normalized = round(count / max_freq * 100)
+                if i < top_third:
+                    trend = "up"
+                elif i >= bottom_third:
+                    trend = "down"
+                else:
+                    trend = "flat"
+                result.append({"keyword": word, "frequency": normalized, "trend": trend})
+            return result
+
+    def get_setting(self, key: str, default=None):
+        with SessionLocal() as session:
+            setting = session.query(SettingModel).filter_by(key=key).first()
+            if setting is None:
+                return default
+            return setting.value
+
+    def set_setting(self, key: str, value) -> None:
+        with SessionLocal() as session:
+            setting = session.query(SettingModel).filter_by(key=key).first()
+            if setting is None:
+                setting = SettingModel(key=key, value=value, updated_at=_now())
+                session.add(setting)
+            else:
+                setting.value = value
+                setting.updated_at = _now()
+            session.commit()
+
+    def add_simulation_response(self, project_id: str, data: dict) -> dict:
+        with SessionLocal() as session:
+            response = SimulationResponseModel(
+                id=data["id"],
+                project_id=project_id,
+                persona_name=data.get("persona_name", ""),
+                segment=data.get("segment", ""),
+                question_id=data.get("question_id", ""),
+                question_text=data.get("question_text", ""),
+                selected_option=data.get("selected_option", ""),
+                rationale=data.get("rationale", ""),
+                integrity_score=data.get("integrity_score", 0.0),
+                timestamp=_now(),
+                cot=data.get("cot", []),
+            )
+            session.add(response)
+
+            sim = session.query(SimulationModel).filter_by(project_id=project_id).first()
+            if sim:
+                sim.completed_responses = (sim.completed_responses or 0) + 1
+                if sim.target_responses and sim.target_responses > 0:
+                    sim.progress = min(100, int(sim.completed_responses / sim.target_responses * 100))
+
+            proj = session.query(ProjectModel).filter_by(id=project_id).first()
+            if proj:
+                proj.response_count = (proj.response_count or 0) + 1
+                proj.updated_at = _now()
+
+            session.commit()
+            return response.to_dict()
+
+    def get_pending_simulation_pairs(self, project_id: str) -> list[tuple[dict, dict]]:
+        with SessionLocal() as session:
+            personas = session.query(PersonaModel).filter_by(project_id=project_id).all()
+            questions = (
+                session.query(SurveyQuestionModel)
+                .filter_by(project_id=project_id)
+                .order_by(SurveyQuestionModel.order)
+                .all()
+            )
+            existing = (
+                session.query(
+                    SimulationResponseModel.persona_name,
+                    SimulationResponseModel.question_id,
+                )
+                .filter_by(project_id=project_id)
+                .all()
+            )
+            done_pairs = set((row[0], row[1]) for row in existing)
+            pending = []
+            for persona in personas:
+                persona_dict = persona.to_dict()
+                for question in questions:
+                    question_dict = question.to_dict()
+                    if (persona_dict["name"], question_dict["id"]) not in done_pairs:
+                        pending.append((persona_dict, question_dict))
+            return pending
 
     # ── Reports ───────────────────────────────────────────────────────────────
     def get_report(self, report_id: str) -> Optional[dict]:

@@ -1,6 +1,7 @@
 """SQLAlchemy ORM models for SQLite persistence."""
 from sqlalchemy import Boolean, Column, DateTime, Float, Integer, JSON, String, Text
 from sqlalchemy.orm import DeclarativeBase
+from datetime import datetime, timezone
 
 
 class Base(DeclarativeBase):
@@ -177,6 +178,13 @@ class SimulationResponseModel(Base):
     cot = Column(JSON, default=list)
 
     def to_dict(self) -> dict:
+        score = self.integrity_score or 0.0
+        if score >= 90:
+            consistency_status = "Good"
+        elif score >= 75:
+            consistency_status = "Warn"
+        else:
+            consistency_status = "Error"
         return {
             "id": self.id,
             "project_id": self.project_id,
@@ -189,6 +197,7 @@ class SimulationResponseModel(Base):
             "integrity_score": self.integrity_score,
             "timestamp": self.timestamp,
             "cot": self.cot or [],
+            "consistency_status": consistency_status,
         }
 
 
@@ -226,3 +235,18 @@ class RevokedTokenModel(Base):
 
     token = Column(String, primary_key=True)
     revoked_at = Column(DateTime, nullable=False)
+
+
+class SettingModel(Base):
+    __tablename__ = "settings"
+
+    key = Column(String, primary_key=True)
+    value = Column(JSON, nullable=False)
+    updated_at = Column(DateTime, nullable=False)
+
+    def to_dict(self) -> dict:
+        return {
+            "key": self.key,
+            "value": self.value,
+            "updated_at": self.updated_at,
+        }

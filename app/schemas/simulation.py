@@ -34,6 +34,7 @@ class ResponseFeedItem(BaseModel):
     integrity_score: float
     timestamp: datetime
     cot: list[str]
+    consistency_status: str = "Good"
 
 
 class ResponseDistributionItem(BaseModel):
