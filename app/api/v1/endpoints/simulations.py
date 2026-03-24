@@ -1,6 +1,8 @@
+import json
+import re
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 
 from app.core.dependencies import get_current_user_id
 from app.schemas.simulation import (
@@ -13,13 +15,19 @@ from app.schemas.simulation import (
     SimulationControlResponse,
     SimulationProgressResponse,
 )
+from app.services import gemini_client
 from app.services.db_store import store
+from app.services.simulation_runner import run_simulation_batch
 
 router = APIRouter(prefix="/simulations", tags=["simulations"])
 
 
 @router.post("/control", response_model=SimulationControlResponse)
-async def control_simulation(body: SimulationControlRequest, _: str = Depends(get_current_user_id)):
+async def control_simulation(
+    body: SimulationControlRequest,
+    background_tasks: BackgroundTasks,
+    _: str = Depends(get_current_user_id),
+):
     project = store.get_project(body.project_id)
     if project is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
@@ -34,6 +42,7 @@ async def control_simulation(body: SimulationControlRequest, _: str = Depends(ge
     if body.action == "start":
         simulation["status"] = "running"
         simulation["progress"] = max(simulation["progress"], 5)
+        background_tasks.add_task(run_simulation_batch, body.project_id)
     elif body.action == "stop":
         simulation["status"] = "paused"
     else:
@@ -70,27 +79,60 @@ async def get_feed(project_id: str, limit: int = Query(default=20, ge=1, le=100)
 
 
 @router.get("/distribution", response_model=list[ResponseDistributionItem])
-async def get_distribution(question_id: str, _: str = Depends(get_current_user_id)):
-    mapping = {
-        "q-001": [
-            {"label": "매우 잘 안다", "value": 41.0},
-            {"label": "어느 정도 안다", "value": 32.0},
-            {"label": "들어봤다", "value": 18.0},
-            {"label": "잘 모른다", "value": 9.0},
-        ],
-        "q-002": [
-            {"label": "매우 크다", "value": 45.0},
-            {"label": "크다", "value": 30.0},
-            {"label": "보통", "value": 15.0},
-            {"label": "낮다", "value": 7.0},
-            {"label": "매우 낮다", "value": 3.0},
-        ],
-    }
-    return [ResponseDistributionItem(**item) for item in mapping.get(question_id, [])]
+async def get_distribution(
+    project_id: str,
+    question_id: str,
+    _: str = Depends(get_current_user_id),
+):
+    data = store.get_response_distribution(project_id, question_id)
+    if data:
+        return [ResponseDistributionItem(**item) for item in data]
+    # 데이터 없으면 빈 리스트 반환
+    return []
 
 
 @router.get("/insight", response_model=InsightResponse)
-async def get_insight(question_id: str, _: str = Depends(get_current_user_id)):
+async def get_insight(
+    project_id: str,
+    question_id: str,
+    _: str = Depends(get_current_user_id),
+):
+    # Gemini로 실제 인사이트 생성 시도
+    if gemini_client.is_available():
+        try:
+            distribution = store.get_response_distribution(project_id, question_id)
+            questions = store.list_survey_questions(project_id)
+            question_text = next(
+                (q["text"] for q in questions if q["id"] == question_id),
+                question_id,
+            )
+            dist_summary = ", ".join(
+                f"{item['label']}: {item['value']}%" for item in distribution
+            ) if distribution else "데이터 없음"
+            prompt = f"""다음 설문 문항과 응답 분포 데이터를 분석하여 마케팅 인사이트를 생성하세요.
+
+문항: {question_text}
+응답 분포: {dist_summary}
+
+다음 JSON만 출력하세요:
+{{"summary": "핵심 인사이트 1~2문장", "strategies": ["전략 1", "전략 2", "전략 3"]}}"""
+
+            text = gemini_client.generate(prompt, temperature=0.7)
+            if text:
+                pattern = r"\{.*\}"
+                match = re.search(pattern, text, re.DOTALL)
+                if match:
+                    parsed = json.loads(match.group())
+                    if isinstance(parsed, dict) and "summary" in parsed and "strategies" in parsed:
+                        return InsightResponse(
+                            summary=parsed["summary"],
+                            strategies=parsed["strategies"],
+                            cached_until=datetime.now(timezone.utc) + timedelta(minutes=15),
+                        )
+        except Exception:
+            pass
+
+    # 폴백
     return InsightResponse(
         summary=f"{question_id} 기준으로 구매 전환 가능성이 높은 세그먼트가 확인되었습니다.",
         strategies=[
@@ -103,6 +145,10 @@ async def get_insight(question_id: str, _: str = Depends(get_current_user_id)):
 
 @router.get("/keywords", response_model=list[KeywordTrendItem])
 async def get_keywords(project_id: str, _: str = Depends(get_current_user_id)):
+    data = store.get_response_keywords(project_id)
+    if data:
+        return [KeywordTrendItem(**item) for item in data]
+    # 기존 하드코딩 폴백
     return [
         KeywordTrendItem(keyword="야간 촬영", frequency=74, trend="up"),
         KeywordTrendItem(keyword="자동 보정", frequency=69, trend="up"),
