@@ -38,6 +38,20 @@ class SurveyDraftGenerationMetaResponse(BaseModel):
     grounding_status: Optional[str] = None
 
 
+class SurveyTemplateResponse(BaseModel):
+    template_id: str
+    template_version: int
+    title: str
+    survey_type: str
+    description: str
+    recommended_question_count: int
+    required_blocks: list[str] = Field(default_factory=list)
+
+
+class SurveyTemplateListResponse(BaseModel):
+    items: list[SurveyTemplateResponse] = Field(default_factory=list)
+
+
 class SurveyGenerateRequest(BaseModel):
     project_id: str
     prompt: str = Field(min_length=1)

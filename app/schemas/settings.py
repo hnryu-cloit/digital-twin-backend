@@ -1,3 +1,5 @@
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -19,3 +21,13 @@ class LlmParameterRequest(BaseModel):
 class LlmParameterResponse(BaseModel):
     temperature: float
     top_p: float
+
+
+class JsonSettingsRequest(BaseModel):
+    key: str = Field(min_length=1)
+    value: dict[str, Any] = Field(default_factory=dict)
+
+
+class JsonSettingsResponse(BaseModel):
+    key: str
+    value: dict[str, Any] = Field(default_factory=dict)

@@ -19,6 +19,8 @@ from app.schemas.survey import (
     SurveyQuestionListResponse,
     SurveyQuestionRequest,
     SurveyQuestionResponse,
+    SurveyTemplateListResponse,
+    SurveyTemplateResponse,
     SurveyUpdateWithAiRequest,
 )
 from app.services import gemini_client
@@ -26,6 +28,36 @@ from app.services.ai_pipeline_service import run_survey_generation
 from app.services.db_store import store
 
 router = APIRouter(prefix="/surveys", tags=["surveys"])
+
+SURVEY_TEMPLATES = [
+    {
+        "template_id": "tpl_concept_test_v1",
+        "template_version": 1,
+        "title": "컨셉 테스트",
+        "survey_type": "concept",
+        "description": "신제품 또는 기능 컨셉의 첫 반응과 구매 의향을 점검합니다.",
+        "recommended_question_count": 5,
+        "required_blocks": ["awareness", "appeal", "purchase_intent", "concern", "open_feedback"],
+    },
+    {
+        "template_id": "tpl_ad_message_v1",
+        "template_version": 1,
+        "title": "광고 메시지 테스트",
+        "survey_type": "ad",
+        "description": "광고 메시지 전달력과 기억도, 구매 의향 변화를 확인합니다.",
+        "recommended_question_count": 6,
+        "required_blocks": ["message_clarity", "memorability", "intent_shift", "improvement_area"],
+    },
+    {
+        "template_id": "tpl_usage_probe_v1",
+        "template_version": 1,
+        "title": "사용 습관 탐색",
+        "survey_type": "usage",
+        "description": "실제 사용 맥락과 불편 요소, 향후 니즈를 탐색합니다.",
+        "recommended_question_count": 7,
+        "required_blocks": ["usage_context", "pain_point", "future_need"],
+    },
+]
 
 QUESTION_TYPE_REASON = {
     "단일선택": "핵심 선호를 빠르게 비교하기 위한 단일 선택 문항입니다.",
@@ -123,6 +155,13 @@ def _build_question_evidence(question: dict) -> list[dict[str, str]]:
         {"label": "문항 상태", "value": question["status"]},
         {"label": "표시 순서", "value": str(question["order"])},
     ]
+
+
+@router.get("/templates", response_model=SurveyTemplateListResponse)
+async def list_survey_templates(_: str = Depends(get_current_user_id)):
+    return SurveyTemplateListResponse(
+        items=[SurveyTemplateResponse(**item) for item in SURVEY_TEMPLATES],
+    )
 
 
 def _build_preview_response(project_id: str) -> SurveyDraftPreviewResponse:

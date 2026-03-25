@@ -3,6 +3,8 @@ from fastapi import APIRouter, Depends
 from app.core.defaults import DEFAULT_LLM_PARAMETERS, DEFAULT_PROMPTS
 from app.core.dependencies import get_current_user_id
 from app.schemas.settings import (
+    JsonSettingsRequest,
+    JsonSettingsResponse,
     LlmParameterRequest,
     LlmParameterResponse,
     PromptSettingsRequest,
@@ -36,3 +38,17 @@ async def get_llm_parameters(_: str = Depends(get_current_user_id)):
 async def save_llm_parameters(body: LlmParameterRequest, _: str = Depends(get_current_user_id)):
     store.set_setting("llm_parameters", body.model_dump())
     return LlmParameterResponse(**body.model_dump())
+
+
+@router.get("/kv/{setting_key}", response_model=JsonSettingsResponse)
+async def get_json_setting(setting_key: str, _: str = Depends(get_current_user_id)):
+    value = store.get_setting(setting_key, {})
+    if not isinstance(value, dict):
+        value = {}
+    return JsonSettingsResponse(key=setting_key, value=value)
+
+
+@router.put("/kv", response_model=JsonSettingsResponse)
+async def save_json_setting(body: JsonSettingsRequest, _: str = Depends(get_current_user_id)):
+    store.set_setting(body.key, body.value)
+    return JsonSettingsResponse(key=body.key, value=body.value)
