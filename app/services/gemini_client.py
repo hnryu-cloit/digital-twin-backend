@@ -28,7 +28,7 @@ def _get_model():
 
 
 def is_available() -> bool:
-    return bool(settings.GEMINI_API_KEY)
+    return _get_model() is not None
 
 
 def generate(prompt: str, temperature: float = 0.7, max_tokens: int = 2048) -> Optional[str]:

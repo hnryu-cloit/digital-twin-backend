@@ -25,6 +25,19 @@ class SurveyDraftQuestionResponse(SurveyQuestionResponse):
     evidence: list[SurveyDraftEvidenceResponse] = Field(default_factory=list)
 
 
+class SurveyDraftGenerationMetaResponse(BaseModel):
+    question_count: int
+    draft_count: int
+    confirmed_count: int
+    latest_job_id: Optional[str] = None
+    user_prompt: Optional[str] = None
+    template_id: Optional[str] = None
+    template_version: Optional[int] = None
+    segment_source: Optional[str] = None
+    generation_source: Optional[str] = None
+    grounding_status: Optional[str] = None
+
+
 class SurveyGenerateRequest(BaseModel):
     project_id: str
     prompt: str = Field(min_length=1)
@@ -55,6 +68,7 @@ class SurveyDraftPreviewResponse(BaseModel):
     project_id: str
     status: str
     summary: str
+    generation_meta: SurveyDraftGenerationMetaResponse
     questions: list[SurveyDraftQuestionResponse]
 
 

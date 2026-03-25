@@ -10,6 +10,7 @@ from app.schemas.ai_job import AIJobResponse
 from app.schemas.survey import (
     SurveyAiUpdateResponse,
     SurveyConfirmRequest,
+    SurveyDraftGenerationMetaResponse,
     SurveyDraftPreviewResponse,
     SurveyDraftQuestionResponse,
     SurveyDraftSaveRequest,
@@ -98,6 +99,8 @@ def _compose_generation_prompt(
 
 
 def _build_question_rationale(question: dict) -> str:
+    if question.get("ai_rationale"):
+        return question["ai_rationale"]
     base_reason = QUESTION_TYPE_REASON.get(question["type"], "리서치 의도를 반영하기 위한 문항입니다.")
     if question["status"] == "confirmed":
         return f"{base_reason} 현재 확정 상태로 저장되어 후속 시뮬레이션과 분석에 사용할 수 있습니다."
@@ -105,6 +108,13 @@ def _build_question_rationale(question: dict) -> str:
 
 
 def _build_question_evidence(question: dict) -> list[dict[str, str]]:
+    ai_evidence = question.get("ai_evidence")
+    if isinstance(ai_evidence, list) and ai_evidence:
+        return [
+            {"label": str(item.get("label", "AI 근거")), "value": str(item.get("value", ""))}
+            for item in ai_evidence
+            if isinstance(item, dict) and item.get("value") is not None
+        ]
     option_count = len(question.get("options", []))
     return [
         {"label": "문항 유형", "value": question["type"]},
@@ -117,14 +127,40 @@ def _build_question_evidence(question: dict) -> list[dict[str, str]]:
 def _build_preview_response(project_id: str) -> SurveyDraftPreviewResponse:
     questions = store.list_survey_questions(project_id)
     status = "confirmed" if questions and all(item["status"] == "confirmed" for item in questions) else "draft"
-    summary = (
-        f"총 {len(questions)}개 문항으로 구성된 설문 초안입니다. "
-        "질문별 근거를 검토한 뒤 확정하면 이후 시뮬레이션과 리포트 흐름에서 사용할 수 있습니다."
-    )
+    latest_job = next(iter(store.list_ai_jobs(project_id=project_id, job_type="survey_generate")), None)
+    latest_payload = latest_job.get("payload", {}) if latest_job else {}
+    draft_count = sum(1 for item in questions if item["status"] == "draft")
+    confirmed_count = sum(1 for item in questions if item["status"] == "confirmed")
+    if status == "confirmed":
+        summary = (
+            f"총 {len(questions)}개 문항이 확정된 설문입니다. "
+            "이 상태로 시뮬레이션과 리포트 흐름에서 재사용할 수 있습니다."
+        )
+    else:
+        summary = (
+            f"총 {len(questions)}개 문항으로 구성된 설문 초안입니다. "
+            "질문별 근거를 검토한 뒤 확정하면 이후 시뮬레이션과 리포트 흐름에서 사용할 수 있습니다."
+        )
     return SurveyDraftPreviewResponse(
         project_id=project_id,
         status=status,
         summary=summary,
+        generation_meta=SurveyDraftGenerationMetaResponse(
+            question_count=len(questions),
+            draft_count=draft_count,
+            confirmed_count=confirmed_count,
+            latest_job_id=latest_job["id"] if latest_job else None,
+            user_prompt=latest_payload.get("user_prompt"),
+            template_id=(latest_payload.get("template") or {}).get("template_id") if latest_payload else None,
+            template_version=(latest_payload.get("template") or {}).get("template_version") if latest_payload else None,
+            segment_source=(latest_payload.get("segment_context") or {}).get("source") if latest_payload else None,
+            generation_source="gemini"
+            if questions and all(item.get("generation_source") == "gemini" for item in questions)
+            else "fallback",
+            grounding_status="ai-generated"
+            if questions and any(item.get("ai_rationale") or item.get("ai_evidence") for item in questions)
+            else "heuristic",
+        ),
         questions=[
             SurveyDraftQuestionResponse(
                 **item,
@@ -160,11 +196,13 @@ def _generate_questions(
             full_prompt = f"""{prompt}
 
 다음 JSON 배열만 출력하세요:
-[{{"text": "문항 텍스트", "type": "단일선택|복수선택|리커트척도|주관식", "options": ["선택지1", "선택지2"]}}]
+[{{"text": "문항 텍스트", "type": "단일선택|복수선택|리커트척도|주관식", "options": ["선택지1", "선택지2"], "rationale": "문항이 필요한 이유 1~2문장", "evidence": [{{"label": "근거 항목", "value": "반영한 정보"}}]}}]
 
 주의:
 - 주관식 문항의 options는 빈 배열 []
 - 리커트척도는 ["매우 그렇다", "그렇다", "보통", "아니다", "전혀 아니다"]
+- rationale은 사용자 요청/템플릿/세그먼트 컨텍스트와 어떻게 연결되는지 설명
+- evidence에는 실제 반영한 컨텍스트만 2~4개 포함
 - 정확히 {question_count}개 생성"""
             text = gemini_client.generate(full_prompt, temperature=0.7)
             if text:
@@ -184,12 +222,16 @@ def _generate_questions(
                                     "options": item.get("options", []) if question_type != "주관식" else [],
                                     "order": index,
                                     "status": "draft",
+                                    "generation_source": "gemini",
+                                    "ai_rationale": item.get("rationale", "").strip(),
+                                    "ai_evidence": item.get("evidence", []),
                                 })
         except Exception:
             generated = None
 
     if not generated:
         generated = _build_fallback_questions(user_prompt, survey_type, question_count)
+        generated = [{**item, "generation_source": "fallback"} for item in generated]
 
     return store.replace_survey_questions(project_id, generated)
 
