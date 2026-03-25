@@ -13,9 +13,20 @@ from app.services.db_store import store
 router = APIRouter(prefix="/assistant", tags=["assistant"])
 
 
-def _build_project_context() -> dict:
+def _resolve_project(project_id: str | None = None) -> dict | None:
     projects = store.list_projects()
-    project = projects[0] if projects else None
+    if project_id:
+        return next((item for item in projects if item["id"] == project_id), None)
+    if not projects:
+        return None
+    return max(
+        projects,
+        key=lambda item: item.get("updated_at") or item.get("created_at") or "",
+    )
+
+
+def _build_project_context(project_id: str | None = None) -> dict:
+    project = _resolve_project(project_id)
     if not project:
         return {}
 
@@ -61,8 +72,8 @@ def _build_project_context() -> dict:
     }
 
 
-def _build_fallback_chat_response() -> tuple[str, list[dict[str, str]], int]:
-    context = _build_project_context()
+def _build_fallback_chat_response(project_id: str | None = None) -> tuple[str, list[dict[str, str]], int]:
+    context = _build_project_context(project_id)
     project = context.get("project")
     if not project:
         return (
@@ -101,7 +112,7 @@ async def chat(body: AssistantChatRequest, _: str = Depends(get_current_user_id)
     if gemini_client.is_available():
         try:
             system_prompt = store.get_setting("prompt:assistant", DEFAULT_PROMPTS["assistant"])
-            project_context = _build_project_context()
+            project_context = _build_project_context(body.project_id)
             # 최근 6개 대화 이력을 컨텍스트로 포함
             recent = messages[-6:] if len(messages) >= 6 else messages[:]
             history_text = "\n".join(
@@ -144,7 +155,7 @@ async def chat(body: AssistantChatRequest, _: str = Depends(get_current_user_id)
         except Exception:
             pass
 
-    answer, evidence, confidence = _build_fallback_chat_response()
+    answer, evidence, confidence = _build_fallback_chat_response(body.project_id)
     messages.append({"role": "assistant", "message": answer})
 
     return AssistantChatResponse(

@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 class AssistantChatRequest(BaseModel):
     message: str = Field(min_length=1)
     session_id: Optional[str] = None
+    project_id: Optional[str] = None
 
 
 class AssistantChatResponse(BaseModel):
