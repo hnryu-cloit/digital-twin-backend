@@ -22,6 +22,15 @@ class SurveyGenerateRequest(BaseModel):
     question_count: int = Field(default=5, ge=1, le=20)
 
 
+class SurveyGenerateJobRequest(BaseModel):
+    project_id: str
+    user_prompt: str = Field(min_length=1)
+    survey_type: str = Field(min_length=1)
+    question_count: int = Field(default=5, ge=1, le=20)
+    template: dict = Field(default_factory=dict)
+    segment_context: dict = Field(default_factory=dict)
+
+
 class SurveyUpdateWithAiRequest(BaseModel):
     prompt: str = Field(min_length=1)
     target_question_id: Optional[str] = None

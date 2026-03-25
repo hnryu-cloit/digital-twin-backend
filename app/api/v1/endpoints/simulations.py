@@ -22,6 +22,42 @@ from app.services.simulation_runner import run_simulation_batch
 router = APIRouter(prefix="/simulations", tags=["simulations"])
 
 
+def _build_distribution_summary(distribution: list[dict]) -> str:
+    if not distribution:
+        return "응답 데이터가 아직 축적되지 않았습니다."
+    top_items = sorted(distribution, key=lambda item: item["value"], reverse=True)
+    lead = top_items[0]
+    if len(top_items) == 1:
+        return f"가장 높은 응답은 '{lead['label']}'이며 비중은 {lead['value']}%입니다."
+    runner_up = top_items[1]
+    gap = round(lead["value"] - runner_up["value"], 1)
+    return (
+        f"가장 높은 응답은 '{lead['label']}' {lead['value']}%이며, "
+        f"다음 응답 '{runner_up['label']}' 대비 {gap}%p 우세합니다."
+    )
+
+
+def _build_distribution_strategies(question_text: str, distribution: list[dict]) -> list[str]:
+    if not distribution:
+        return [
+            f"'{question_text}' 문항에 대한 응답을 더 수집해 해석 가능 구간까지 표본을 확대합니다.",
+            "현재는 분포가 충분하지 않으므로 실시간 피드와 키워드 변화를 함께 모니터링합니다.",
+        ]
+
+    top_items = sorted(distribution, key=lambda item: item["value"], reverse=True)
+    lead = top_items[0]
+    strategies = [
+        f"'{lead['label']}' 응답층을 기준으로 관련 메시지와 랜딩 카피를 우선 정렬합니다.",
+        f"'{question_text}' 문항에서 높은 반응을 보인 표현을 상세 페이지와 광고 소재에 재사용합니다.",
+    ]
+    if len(top_items) > 1:
+        runner_up = top_items[1]
+        strategies.append(
+            f"상위 응답 '{lead['label']}'와 차순위 '{runner_up['label']}'의 차이를 비교해 세그먼트별 메시지 분기를 설계합니다."
+        )
+    return strategies
+
+
 @router.post("/control", response_model=SimulationControlResponse)
 async def control_simulation(
     body: SimulationControlRequest,
@@ -97,15 +133,16 @@ async def get_insight(
     question_id: str,
     _: str = Depends(get_current_user_id),
 ):
+    distribution = store.get_response_distribution(project_id, question_id)
+    questions = store.list_survey_questions(project_id)
+    question_text = next(
+        (q["text"] for q in questions if q["id"] == question_id),
+        question_id,
+    )
+
     # Gemini로 실제 인사이트 생성 시도
     if gemini_client.is_available():
         try:
-            distribution = store.get_response_distribution(project_id, question_id)
-            questions = store.list_survey_questions(project_id)
-            question_text = next(
-                (q["text"] for q in questions if q["id"] == question_id),
-                question_id,
-            )
             dist_summary = ", ".join(
                 f"{item['label']}: {item['value']}%" for item in distribution
             ) if distribution else "데이터 없음"
@@ -132,13 +169,9 @@ async def get_insight(
         except Exception:
             pass
 
-    # 폴백
     return InsightResponse(
-        summary=f"{question_id} 기준으로 구매 전환 가능성이 높은 세그먼트가 확인되었습니다.",
-        strategies=[
-            "핵심 타겟 메시지를 사용 장면 중심으로 전환합니다.",
-            "야간 촬영 및 AI 자동 보정 비교 자산을 전면 배치합니다.",
-        ],
+        summary=_build_distribution_summary(distribution),
+        strategies=_build_distribution_strategies(question_text, distribution),
         cached_until=datetime.now(timezone.utc) + timedelta(minutes=15),
     )
 
@@ -148,12 +181,7 @@ async def get_keywords(project_id: str, _: str = Depends(get_current_user_id)):
     data = store.get_response_keywords(project_id)
     if data:
         return [KeywordTrendItem(**item) for item in data]
-    # 기존 하드코딩 폴백
-    return [
-        KeywordTrendItem(keyword="야간 촬영", frequency=74, trend="up"),
-        KeywordTrendItem(keyword="자동 보정", frequency=69, trend="up"),
-        KeywordTrendItem(keyword="가격 부담", frequency=31, trend="down"),
-    ]
+    return []
 
 
 @router.get("/cot/{response_id}", response_model=CotResponse)

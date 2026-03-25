@@ -10,8 +10,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 
 from app.core.config import settings
+from app.core.defaults import DEFAULT_LLM_PARAMETERS, DEFAULT_PROMPTS
 from app.core.security import hash_password
+from app.services.db_migrations import ensure_sqlite_persona_dimensions
 from app.services.db_models import (
+    AIJobModel,
     Base,
     PersonaModel,
     ProjectModel,
@@ -37,6 +40,9 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 def init_db() -> None:
     """Create all tables. Called on app startup."""
     Base.metadata.create_all(bind=engine)
+    if _db_url.startswith("sqlite"):
+        sqlite_path = _db_url.replace("sqlite:///", "", 1)
+        ensure_sqlite_persona_dimensions(sqlite_path)
     _seed_admin()
 
 
@@ -63,12 +69,112 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _derive_occupation_category(occupation: str, age: int) -> str:
+    occupation_lower = occupation.lower()
+    if age <= 24:
+        return "학생"
+    if any(keyword in occupation_lower for keyword in ("개발", "디자인", "연구", "컨설턴트", "architect")):
+        return "전문직"
+    if any(keyword in occupation_lower for keyword in ("사업", "자영업", "대표")):
+        return "자영업자"
+    if any(keyword in occupation_lower for keyword in ("프리랜서", "유튜버", "크리에이터")):
+        return "프리랜서"
+    return "직장인"
+
+
+def _derive_region(age: int, segment: str) -> str:
+    if "비즈니스" in segment or age >= 40:
+        return "대한민국"
+    if "게이밍" in segment:
+        return "일본"
+    if "프리미엄" in segment:
+        return "미국"
+    return "대한민국"
+
+
+def _derive_household_type(age: int, segment: str) -> str:
+    if age <= 24:
+        return "1인 가구"
+    if "실용 중시 가족형" in segment:
+        return "3인 이상"
+    if age >= 38:
+        return "2인 가구"
+    return "1인 가구"
+
+
+def _derive_buy_channel(preferred_channel: str) -> str:
+    channel_map = {
+        "YouTube": "자급제",
+        "Instagram": "공식몰",
+        "TikTok": "통신사 대리점",
+        "LinkedIn": "오프라인 유통",
+    }
+    return channel_map.get(preferred_channel, "공식몰")
+
+
+def _derive_product_group(purchase_history: list[str]) -> str:
+    device = " ".join(purchase_history).lower()
+    if "fold" in device:
+        return "Galaxy Z Fold"
+    if "flip" in device:
+        return "Galaxy Z Flip"
+    if "ultra" in device:
+        return "Galaxy S Ultra"
+    if "s24+" in device or "s23+" in device:
+        return "Galaxy S Plus"
+    if "a55" in device or "a34" in device or "a35" in device:
+        return "Galaxy A"
+    return "Galaxy S"
+
+
+def _parse_age_range(age_range: str) -> int:
+    numbers = [int(part) for part in age_range.replace("~", "-").split("-") if part.strip().isdigit()]
+    if len(numbers) >= 2:
+        return round((numbers[0] + numbers[1]) / 2)
+    if len(numbers) == 1:
+        return numbers[0]
+    return 30
+
+
+def _infer_gender(description: str) -> str:
+    if "남성" in description:
+        return "남성"
+    if "여성" in description:
+        return "여성"
+    return "혼합"
+
+
+def _infer_purchase_history(persona: dict) -> list[str]:
+    combined = " ".join(
+        [
+            persona.get("persona_name", ""),
+            persona.get("description", ""),
+            " ".join(persona.get("keywords", [])),
+            " ".join(persona.get("interests", [])),
+        ]
+    ).lower()
+    if "fold" in combined or "폴드" in combined:
+        return ["Galaxy Z Fold6"]
+    if "flip" in combined or "플립" in combined:
+        return ["Galaxy Z Flip6"]
+    if "premium" in combined or "프리미엄" in combined or "고성능" in combined or "ultra" in combined:
+        return ["Galaxy S24 Ultra"]
+    if "실용" in combined or "balance" in combined or "밸런스" in combined:
+        return ["Galaxy A55"]
+    return ["Galaxy S24"]
+
+
 def _build_persona_response(persona_dict: dict) -> dict:
     """Compute derived score fields from raw persona data."""
     activity_logs = persona_dict.get("activity_logs", [])
     brand_attitude = persona_dict.get("brand_attitude", 0.0)
     marketing_acceptance = persona_dict.get("marketing_acceptance", 0.0)
     purchase_intent = persona_dict.get("purchase_intent", 0.0)
+    age = persona_dict.get("age", 0)
+    occupation = persona_dict.get("occupation", "")
+    segment = persona_dict.get("segment", "")
+    preferred_channel = persona_dict.get("preferred_channel", "")
+    purchase_history = persona_dict.get("purchase_history", [])
 
     data_confidence = round(min(99.0, 55.0 + (len(activity_logs) * 12.5)), 1)
     churn_risk = round(
@@ -78,6 +184,11 @@ def _build_persona_response(persona_dict: dict) -> dict:
     engagement_score = round((marketing_acceptance * 0.6) + (purchase_intent * 0.4), 1)
     return {
         **{k: v for k, v in persona_dict.items() if k not in ("profile", "purchase_history", "activity_logs", "cot")},
+        "occupation_category": persona_dict.get("occupation_category") or _derive_occupation_category(occupation, age),
+        "region": persona_dict.get("region") or _derive_region(age, segment),
+        "household_type": persona_dict.get("household_type") or _derive_household_type(age, segment),
+        "buy_channel": persona_dict.get("buy_channel") or _derive_buy_channel(preferred_channel),
+        "product_group": persona_dict.get("product_group") or _derive_product_group(purchase_history),
         "score": {
             "churn_risk": churn_risk,
             "engagement_score": engagement_score,
@@ -93,12 +204,8 @@ class DbStore:
 
     # ── prompts / llm settings (in-memory only; not critical to persist) ──────
     def __init__(self) -> None:
-        self.prompts = {
-            "simulation": "Respond as a market research digital twin.",
-            "survey": "Generate concise and structured survey questions.",
-            "assistant": "Answer with evidence and confidence.",
-        }
-        self.llm_parameters = {"temperature": 0.7, "top_p": 0.9}
+        self.prompts = deepcopy(DEFAULT_PROMPTS)
+        self.llm_parameters = deepcopy(DEFAULT_LLM_PARAMETERS)
         self.chat_sessions: dict[str, list[dict]] = {}
 
     # ── Users ─────────────────────────────────────────────────────────────────
@@ -215,10 +322,15 @@ class DbStore:
                     age=age,
                     gender=payload["gender"],
                     occupation=payload["occupation"],
+                    occupation_category=_derive_occupation_category(payload["occupation"], age),
+                    region=_derive_region(age, payload["segment"]),
+                    household_type=_derive_household_type(age, payload["segment"]),
                     segment=payload["segment"],
                     keywords=[payload["segment"], payload["occupation"], "AI"],
                     interests=["브랜드 탐색", "제품 비교", "온라인 리뷰"],
                     preferred_channel="YouTube",
+                    buy_channel=_derive_buy_channel("YouTube"),
+                    product_group=_derive_product_group(["Galaxy S24"]),
                     purchase_intent=purchase_intent,
                     marketing_acceptance=marketing_acceptance,
                     brand_attitude=brand_attitude,
@@ -234,6 +346,71 @@ class DbStore:
             proj = session.query(ProjectModel).filter_by(id=payload["project_id"]).first()
             if proj:
                 proj.persona_count = (proj.persona_count or 0) + len(created)
+                proj.updated_at = _now()
+            session.commit()
+        return created
+
+    def replace_personas(self, project_id: str, personas: list[dict], overwrite_existing: bool = True) -> list[dict]:
+        created: list[dict] = []
+        with SessionLocal() as session:
+            existing_count = session.query(PersonaModel).filter_by(project_id=project_id).count()
+            if existing_count and not overwrite_existing:
+                raise ValueError("Personas already exist for this project.")
+
+            if overwrite_existing:
+                session.query(PersonaModel).filter_by(project_id=project_id).delete()
+
+            for index, persona in enumerate(personas, start=1):
+                age = _parse_age_range(str(persona.get("age_range", "")))
+                name = persona.get("persona_name") or f"AI Persona {index}"
+                description = persona.get("description", "")
+                preferred_channel = persona.get("preferred_channel", "")
+                purchase_history = _infer_purchase_history(persona)
+                segment_tags = persona.get("segment_tags", [])
+                region = next(
+                    (
+                        tag
+                        for tag in segment_tags
+                        if isinstance(tag, str) and tag not in {"SNS 숏폼", "영상 캠페인", "텍스트 브리핑"}
+                    ),
+                    _derive_region(age, name),
+                )
+                occupation = persona.get("persona_name_en") or f"{name} 사용자"
+                model = PersonaModel(
+                    id=f"prs-{uuid.uuid4().hex[:8]}",
+                    project_id=project_id,
+                    name=name,
+                    age=age,
+                    gender=_infer_gender(description),
+                    occupation=occupation,
+                    occupation_category=_derive_occupation_category(occupation, age),
+                    region=region,
+                    household_type=_derive_household_type(age, name),
+                    segment=name,
+                    keywords=persona.get("keywords", []),
+                    interests=persona.get("interests", []),
+                    preferred_channel=preferred_channel,
+                    buy_channel=_derive_buy_channel(preferred_channel),
+                    product_group=_derive_product_group(purchase_history),
+                    purchase_intent=float(persona.get("purchase_intent", 0.0)),
+                    marketing_acceptance=float(persona.get("marketing_acceptance", 0.0)),
+                    brand_attitude=float(persona.get("brand_attitude", 0.0)),
+                    future_value=float(persona.get("future_value", 0.0)),
+                    profile=description,
+                    purchase_history=purchase_history,
+                    activity_logs=persona.get("key_characteristics", []),
+                    cot=[
+                        "AI pipeline cluster stats analyzed",
+                        "Persona profile generated",
+                        "Backend normalized persona fields",
+                    ],
+                )
+                session.add(model)
+                created.append(_build_persona_response(model.to_dict()))
+
+            proj = session.query(ProjectModel).filter_by(id=project_id).first()
+            if proj:
+                proj.persona_count = len(created)
                 proj.updated_at = _now()
             session.commit()
         return created
@@ -279,6 +456,55 @@ class DbStore:
                 proj.updated_at = _now()
             session.commit()
         return deepcopy(questions)
+
+    # ── AI Jobs ───────────────────────────────────────────────────────────────
+    def create_ai_job(self, project_id: str, job_type: str, payload: dict, created_by: str) -> dict:
+        job_id = f"job-{uuid.uuid4().hex[:8]}"
+        with SessionLocal() as session:
+            job = AIJobModel(
+                id=job_id,
+                project_id=project_id,
+                job_type=job_type,
+                status="queued",
+                progress=0,
+                payload=payload,
+                result_ref=None,
+                error_code=None,
+                error_message=None,
+                created_by=created_by,
+                created_at=_now(),
+                started_at=None,
+                completed_at=None,
+            )
+            session.add(job)
+            session.commit()
+            return job.to_dict()
+
+    def get_ai_job(self, job_id: str) -> Optional[dict]:
+        with SessionLocal() as session:
+            job = session.query(AIJobModel).filter_by(id=job_id).first()
+            return job.to_dict() if job else None
+
+    def list_ai_jobs(self, project_id: Optional[str] = None, job_type: Optional[str] = None) -> list[dict]:
+        with SessionLocal() as session:
+            query = session.query(AIJobModel)
+            if project_id:
+                query = query.filter_by(project_id=project_id)
+            if job_type:
+                query = query.filter_by(job_type=job_type)
+            jobs = query.order_by(AIJobModel.created_at.desc()).all()
+            return [job.to_dict() for job in jobs]
+
+    def update_ai_job(self, job_id: str, **fields) -> Optional[dict]:
+        with SessionLocal() as session:
+            job = session.query(AIJobModel).filter_by(id=job_id).first()
+            if job is None:
+                return None
+            for key, value in fields.items():
+                setattr(job, key, value)
+            session.commit()
+            session.refresh(job)
+            return job.to_dict()
 
     # ── Simulations ───────────────────────────────────────────────────────────
     def get_simulation(self, project_id: str) -> Optional[dict]:
@@ -477,6 +703,30 @@ class DbStore:
         with SessionLocal() as session:
             proj = session.query(ProjectModel).filter_by(id=project_id).first()
             project_name = proj.name if proj else project_id
+            personas = session.query(PersonaModel).filter_by(project_id=project_id).all()
+            responses = session.query(SimulationResponseModel).filter_by(project_id=project_id).all()
+            simulation = session.query(SimulationModel).filter_by(project_id=project_id).first()
+
+            persona_count = len(personas)
+            response_count = len(responses)
+            dominant_segment = "데이터 없음"
+            if personas:
+                segment_counts: dict[str, int] = {}
+                for persona in personas:
+                    segment = persona.segment or "미분류"
+                    segment_counts[segment] = segment_counts.get(segment, 0) + 1
+                dominant_segment = sorted(segment_counts.items(), key=lambda item: item[1], reverse=True)[0][0]
+
+            top_question = None
+            if responses:
+                question_counts: dict[str, int] = {}
+                for response in responses:
+                    key = response.question_text or response.question_id
+                    question_counts[key] = question_counts.get(key, 0) + 1
+                top_question = sorted(question_counts.items(), key=lambda item: item[1], reverse=True)[0][0]
+
+            response_progress = simulation.progress if simulation else (proj.progress if proj else 0)
+            target_responses = proj.target_responses if proj else 0
 
             report = ReportModel(
                 id=report_id,
@@ -487,11 +737,22 @@ class DbStore:
                 size="4.2MB",
                 created_at=now,
                 sections=[
-                    {"id": "overview", "title": "개요", "content": "시뮬레이션 결과 기반 자동 생성 리포트입니다."},
-                    {"id": "recommendation", "title": "권장사항", "content": "핵심 타겟 중심 메시지 전략을 추천합니다."},
+                    {
+                        "id": "overview",
+                        "title": "개요",
+                        "content": f"{project_name} 프로젝트는 현재 {persona_count}명의 페르소나와 {response_count}건의 시뮬레이션 응답을 기반으로 집계되었습니다.",
+                    },
+                    {
+                        "id": "recommendation",
+                        "title": "권장사항",
+                        "content": f"가장 큰 세그먼트는 {dominant_segment}이며, 우선 검토 문항은 '{top_question or '집계 중'}' 입니다.",
+                    },
                 ],
-                kpis=[{"label": "응답률", "value": "64%"}, {"label": "구매 의향", "value": "68.7%"}],
-                charts=[{"id": "chart-01", "type": "bar", "title": "응답 분포"}],
+                kpis=[
+                    {"label": "응답 진행률", "value": f"{response_progress}%"},
+                    {"label": "목표 응답 수", "value": str(target_responses)},
+                ],
+                charts=[{"id": "chart-01", "type": "bar", "title": top_question or "응답 분포"}],
             )
             session.add(report)
             if proj:

@@ -38,8 +38,8 @@ async def list_projects(
 
 @router.get("/{project_id}", response_model=ProjectDetailResponse)
 async def get_project(project_id: str, _: str = Depends(get_current_user_id)):
-    project = store.projects.get(project_id)
-    if project is None or project["deleted_at"] is not None:
+    project = store.get_project(project_id)
+    if project is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
     return ProjectDetailResponse(**project)
 

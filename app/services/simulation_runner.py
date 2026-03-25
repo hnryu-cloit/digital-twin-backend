@@ -53,18 +53,28 @@ def _generate_response_with_gemini(persona: dict, question: dict) -> Optional[di
 
 
 def _fallback_response(persona: dict, question: dict) -> dict:
-    """Gemini 없을 때 구매 의향 기반 결정론적 응답."""
+    """Gemini 없을 때 페르소나/문항 정보 기반 응답 생성."""
     options = question.get("options") or ["매우 그렇다", "그렇다", "보통", "아니다", "전혀 아니다"]
     intent = persona.get("purchase_intent", 70)
-    idx = 0 if intent > 80 else (1 if intent > 65 else 2)
+    marketing = persona.get("marketing_acceptance", 70)
+    brand = persona.get("brand_attitude", 70)
+    combined_score = (intent * 0.5) + (marketing * 0.3) + (brand * 0.2)
+    idx = 0 if combined_score >= 82 else (1 if combined_score >= 68 else 2)
     idx = min(idx, len(options) - 1)
+    selected_option = options[idx]
+    region = persona.get("region", "주요 시장")
+    keyword = persona.get("keywords", ["핵심 니즈"])[0]
     return {
-        "selected_option": options[idx],
-        "rationale": f"{persona['segment']} 특성을 고려한 응답입니다. 구매 의향 {intent:.0f}점 기준으로 판단했습니다.",
+        "selected_option": selected_option,
+        "rationale": (
+            f"{persona['segment']} 세그먼트의 {persona.get('occupation', '사용자')}로서 "
+            f"'{question['text']}' 문항을 {region} 시장 관점에서 해석했고, "
+            f"주요 관심사인 {keyword}와 구매 의향 {intent:.0f}점을 반영해 '{selected_option}'를 선택했습니다."
+        ),
         "cot": [
-            f"페르소나 '{persona['name']}' 프로필 분석",
-            f"구매 의향 {intent:.0f}/100 → 응답 성향 도출",
-            "응답 일관성 검증 완료",
+            f"페르소나 '{persona['name']}'의 세그먼트와 관심 키워드 확인",
+            f"구매 의향 {intent:.0f}, 마케팅 수용도 {marketing:.0f}, 브랜드 태도 {brand:.0f}를 종합",
+            f"문항 맥락에 가장 가까운 선택지 '{selected_option}' 채택",
         ],
     }
 

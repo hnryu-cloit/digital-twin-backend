@@ -83,10 +83,15 @@ class PersonaModel(Base):
     age = Column(Integer, default=0)
     gender = Column(String, default="")
     occupation = Column(String, default="")
+    occupation_category = Column(String, default="")
+    region = Column(String, default="")
+    household_type = Column(String, default="")
     segment = Column(String, default="")
     keywords = Column(JSON, default=list)
     interests = Column(JSON, default=list)
     preferred_channel = Column(String, default="")
+    buy_channel = Column(String, default="")
+    product_group = Column(String, default="")
     purchase_intent = Column(Float, default=0.0)
     marketing_acceptance = Column(Float, default=0.0)
     brand_attitude = Column(Float, default=0.0)
@@ -104,10 +109,15 @@ class PersonaModel(Base):
             "age": self.age,
             "gender": self.gender,
             "occupation": self.occupation,
+            "occupation_category": self.occupation_category,
+            "region": self.region,
+            "household_type": self.household_type,
             "segment": self.segment,
             "keywords": self.keywords or [],
             "interests": self.interests or [],
             "preferred_channel": self.preferred_channel,
+            "buy_channel": self.buy_channel,
+            "product_group": self.product_group,
             "purchase_intent": self.purchase_intent,
             "marketing_acceptance": self.marketing_acceptance,
             "brand_attitude": self.brand_attitude,
@@ -227,6 +237,41 @@ class ReportModel(Base):
             "sections": self.sections or [],
             "kpis": self.kpis or [],
             "charts": self.charts or [],
+        }
+
+
+class AIJobModel(Base):
+    __tablename__ = "ai_jobs"
+
+    id = Column(String, primary_key=True)
+    project_id = Column(String, nullable=False)
+    job_type = Column(String, nullable=False)
+    status = Column(String, default="queued")
+    progress = Column(Integer, default=0)
+    payload = Column(JSON, default=dict)
+    result_ref = Column(JSON, nullable=True)
+    error_code = Column(String, nullable=True)
+    error_message = Column(Text, nullable=True)
+    created_by = Column(String, nullable=False)
+    created_at = Column(DateTime, nullable=False)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "project_id": self.project_id,
+            "job_type": self.job_type,
+            "status": self.status,
+            "progress": self.progress,
+            "payload": self.payload or {},
+            "result_ref": self.result_ref,
+            "error_code": self.error_code,
+            "error_message": self.error_message,
+            "created_by": self.created_by,
+            "created_at": self.created_at,
+            "started_at": self.started_at,
+            "completed_at": self.completed_at,
         }
 
 

@@ -1,13 +1,16 @@
 import json
 import re
 import uuid
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response, status
 
 from app.core.dependencies import get_current_user_id
+from app.schemas.ai_job import AIJobResponse
 from app.schemas.survey import (
     SurveyAiUpdateResponse,
     SurveyConfirmRequest,
+    SurveyGenerateJobRequest,
     SurveyGenerateRequest,
     SurveyQuestionListResponse,
     SurveyQuestionRequest,
@@ -20,19 +23,92 @@ from app.services.db_store import store
 router = APIRouter(prefix="/surveys", tags=["surveys"])
 
 
-@router.post("/generate", response_model=SurveyQuestionListResponse)
-async def generate_survey(body: SurveyGenerateRequest, _: str = Depends(get_current_user_id)):
-    if not store.get_project(body.project_id):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
+def _fallback_question_templates(survey_type: str) -> list[tuple[str, list[str]]]:
+    templates = {
+        "concept": [
+            ("이 컨셉의 첫인상은 어떻습니까?", ["매우 긍정적", "긍정적", "보통", "부정적", "매우 부정적"]),
+            ("가장 매력적으로 느껴지는 요소는 무엇입니까?", ["핵심 기능", "디자인", "브랜드 신뢰", "가격 경쟁력"]),
+            ("실제 구매를 고려하게 만드는 요인은 무엇입니까?", ["성능", "편의성", "가격", "추천/후기"]),
+            ("이 컨셉에서 가장 우려되는 점은 무엇입니까?", ["가격", "복잡성", "차별성 부족", "신뢰성"]),
+        ],
+        "ad": [
+            ("광고 메시지가 제품의 강점을 명확히 전달합니까?", ["매우 그렇다", "그렇다", "보통", "아니다", "전혀 아니다"]),
+            ("광고를 본 뒤 기억에 남는 요소는 무엇입니까?", ["카피", "비주얼", "혜택", "브랜드"]),
+            ("광고 노출 후 구매 의향 변화는 어떻습니까?", ["매우 상승", "상승", "변화 없음", "하락"]),
+            ("광고 메시지에서 보완이 필요한 부분은 무엇입니까?", ["차별성", "신뢰성", "혜택 설명", "타깃 적합성"]),
+        ],
+    }
+    return templates.get(
+        survey_type,
+        [
+            ("이 주제에 대해 얼마나 관심이 있습니까?", ["매우 높다", "높다", "보통", "낮다", "매우 낮다"]),
+            ("가장 중요하게 보는 판단 기준은 무엇입니까?", ["품질", "가격", "편의성", "브랜드"]),
+            ("구매 또는 참여를 결정하게 만드는 계기는 무엇입니까?", ["추천", "경험", "혜택", "필요성"]),
+            ("개선이 필요하다고 느끼는 지점은 무엇입니까?", ["기능", "가격", "설명", "접근성"]),
+        ],
+    )
 
+
+def _build_fallback_questions(prompt: str, survey_type: str, question_count: int) -> list[dict]:
+    base_templates = _fallback_question_templates(survey_type)
+    questions: list[dict] = []
+    for index in range(question_count):
+        template_text, options = base_templates[index % len(base_templates)]
+        questions.append(
+            {
+                "id": f"q-{uuid.uuid4().hex[:8]}",
+                "text": f"{prompt} - {template_text}",
+                "type": "단일선택",
+                "options": options,
+                "order": index + 1,
+                "status": "draft",
+            }
+        )
+    return questions
+
+
+def _compose_generation_prompt(
+    user_prompt: str,
+    survey_type: str,
+    question_count: int,
+    template: dict,
+    segment_context: dict,
+) -> str:
+    template_id = template.get("template_id", "template-not-set")
+    required_blocks = ", ".join(template.get("required_blocks", [])) or "none"
+    segment_summary = json.dumps(segment_context, ensure_ascii=False) if segment_context else "없음"
+    return (
+        f"{question_count}개 설문 문항을 생성하세요.\n"
+        f"유형: {survey_type}\n"
+        f"사용자 요청: {user_prompt}\n"
+        f"리서치 템플릿 ID: {template_id}\n"
+        f"필수 블록: {required_blocks}\n"
+        f"세그먼트 분석 컨텍스트: {segment_summary}"
+    )
+
+
+def _generate_questions(
+    project_id: str,
+    user_prompt: str,
+    survey_type: str,
+    question_count: int,
+    template: dict | None = None,
+    segment_context: dict | None = None,
+) -> list[dict]:
     generated = None
+    template = template or {}
+    segment_context = segment_context or {}
 
-    # Gemini로 실제 문항 생성 시도
     if gemini_client.is_available():
         try:
-            prompt = f"""{body.question_count}개 설문 문항을 생성하세요.
-유형: {body.survey_type}
-목적: {body.prompt}
+            prompt = _compose_generation_prompt(
+                user_prompt=user_prompt,
+                survey_type=survey_type,
+                question_count=question_count,
+                template=template,
+                segment_context=segment_context,
+            )
+            full_prompt = f"""{prompt}
 
 다음 JSON 배열만 출력하세요:
 [{{"text": "문항 텍스트", "type": "단일선택|복수선택|리커트척도|주관식", "options": ["선택지1", "선택지2"]}}]
@@ -40,9 +116,8 @@ async def generate_survey(body: SurveyGenerateRequest, _: str = Depends(get_curr
 주의:
 - 주관식 문항의 options는 빈 배열 []
 - 리커트척도는 ["매우 그렇다", "그렇다", "보통", "아니다", "전혀 아니다"]
-- 정확히 {body.question_count}개 생성"""
-
-            text = gemini_client.generate(prompt, temperature=0.7)
+- 정확히 {question_count}개 생성"""
+            text = gemini_client.generate(full_prompt, temperature=0.7)
             if text:
                 pattern = r"\[.*\]"
                 match = re.search(pattern, text, re.DOTALL)
@@ -64,25 +139,87 @@ async def generate_survey(body: SurveyGenerateRequest, _: str = Depends(get_curr
         except Exception:
             generated = None
 
-    # 폴백 로직
     if not generated:
-        generated = []
-        for index in range(1, body.question_count + 1):
-            question_type = ["단일선택", "복수선택", "리커트척도", "주관식"][(index - 1) % 4]
-            generated.append(
-                {
-                    "id": f"q-{uuid.uuid4().hex[:8]}",
-                    "text": f"{body.prompt} 관련 자동 생성 문항 {index}",
-                    "type": question_type,
-                    "options": [] if question_type == "주관식" else ["매우 그렇다", "그렇다", "보통", "아니다"],
-                    "order": index,
-                    "status": "draft",
-                }
-            )
+        generated = _build_fallback_questions(user_prompt, survey_type, question_count)
 
+    return store.replace_survey_questions(project_id, generated)
+
+
+def _run_generate_survey_job(job_id: str) -> None:
+    job = store.get_ai_job(job_id)
+    if job is None or job["status"] == "cancelled":
+        return
+
+    payload = job.get("payload", {})
+    store.update_ai_job(
+        job_id,
+        status="running",
+        progress=15,
+        started_at=datetime.now(timezone.utc),
+    )
+    try:
+        questions = _generate_questions(
+            project_id=job["project_id"],
+            user_prompt=payload.get("user_prompt", ""),
+            survey_type=payload.get("survey_type", "concept"),
+            question_count=payload.get("question_count", 5),
+            template=payload.get("template", {}),
+            segment_context=payload.get("segment_context", {}),
+        )
+        store.update_ai_job(
+            job_id,
+            status="completed",
+            progress=100,
+            result_ref={
+                "resource": "survey_questions",
+                "project_id": job["project_id"],
+                "question_count": len(questions),
+            },
+            completed_at=datetime.now(timezone.utc),
+        )
+    except Exception as error:
+        store.update_ai_job(
+            job_id,
+            status="failed",
+            progress=100,
+            error_code="SURVEY_GENERATION_FAILED",
+            error_message=str(error),
+            completed_at=datetime.now(timezone.utc),
+        )
+
+
+@router.post("/generate-job", response_model=AIJobResponse, status_code=status.HTTP_202_ACCEPTED)
+async def generate_survey_job(
+    body: SurveyGenerateJobRequest,
+    background_tasks: BackgroundTasks,
+    user_id: str = Depends(get_current_user_id),
+):
+    if not store.get_project(body.project_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
+
+    job = store.create_ai_job(
+        project_id=body.project_id,
+        job_type="survey_generate",
+        payload=body.model_dump(),
+        created_by=user_id,
+    )
+    background_tasks.add_task(_run_generate_survey_job, job["id"])
+    return AIJobResponse(**job)
+
+
+@router.post("/generate", response_model=SurveyQuestionListResponse)
+async def generate_survey(body: SurveyGenerateRequest, _: str = Depends(get_current_user_id)):
+    if not store.get_project(body.project_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
+    generated = _generate_questions(
+        project_id=body.project_id,
+        user_prompt=body.prompt,
+        survey_type=body.survey_type,
+        question_count=body.question_count,
+    )
     return SurveyQuestionListResponse(
         project_id=body.project_id,
-        questions=[SurveyQuestionResponse(**item) for item in store.replace_survey_questions(body.project_id, generated)],
+        questions=[SurveyQuestionResponse(**item) for item in generated],
     )
 
 
@@ -168,18 +305,17 @@ async def ai_edit_survey(
         except Exception:
             updated_questions = None
 
-    # 폴백 로직
     if updated_questions is None:
         diff: list[str] = []
         updated_questions = []
         for question in questions:
             next_question = dict(question)
             if body.target_question_id is None or question["id"] == body.target_question_id:
-                next_question["text"] = f"{question['text']} / {body.prompt}"
-                diff.append(f"{question['id']} updated")
+                next_question["text"] = f"{question['text']} ({body.prompt})"
+                diff.append(f"{question['id']} revised")
             updated_questions.append(next_question)
     else:
-        diff = [f"{q['id']} updated" for q in updated_questions]
+        diff = [f"{q['id']} revised" for q in updated_questions]
 
     store.replace_survey_questions(project_id, updated_questions)
 

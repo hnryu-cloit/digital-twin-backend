@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
     assistant,
+    ai_jobs,
     auth,
     data,
     personas,
@@ -16,6 +17,7 @@ from app.api.v1.endpoints import (
 
 router = APIRouter(prefix="/api")
 router.include_router(auth.router)
+router.include_router(ai_jobs.router)
 router.include_router(data.router)
 router.include_router(projects.router)
 router.include_router(personas.router)

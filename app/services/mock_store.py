@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from app.core.config import settings
+from app.core.defaults import DEFAULT_LLM_PARAMETERS, DEFAULT_PROMPTS
 from app.core.security import hash_password
 
 
@@ -13,6 +14,15 @@ class MockStore:
     def __init__(self) -> None:
         now = datetime.now(timezone.utc)
         admin_id = "usr-admin"
+        project_id = f"prj-{uuid.uuid4().hex[:8]}"
+        persona_id_1 = f"prs-{uuid.uuid4().hex[:8]}"
+        persona_id_2 = f"prs-{uuid.uuid4().hex[:8]}"
+        question_id_1 = f"q-{uuid.uuid4().hex[:8]}"
+        question_id_2 = f"q-{uuid.uuid4().hex[:8]}"
+        response_id_1 = f"rsp-{uuid.uuid4().hex[:8]}"
+        response_id_2 = f"rsp-{uuid.uuid4().hex[:8]}"
+        report_id = f"rpt-{uuid.uuid4().hex[:8]}"
+        simulation_job_id = f"job-{uuid.uuid4().hex[:8]}"
 
         self.users = {
             admin_id: {
@@ -26,16 +36,12 @@ class MockStore:
         }
         self.revoked_refresh_tokens: set[str] = set()
         self.chat_sessions: dict[str, list[dict]] = {}
-        self.prompts = {
-            "simulation": "Respond as a market research digital twin.",
-            "survey": "Generate concise and structured survey questions.",
-            "assistant": "Answer with evidence and confidence.",
-        }
-        self.llm_parameters = {"temperature": 0.7, "top_p": 0.9}
+        self.prompts = deepcopy(DEFAULT_PROMPTS)
+        self.llm_parameters = deepcopy(DEFAULT_LLM_PARAMETERS)
 
         self.projects = {
-            "prj-001": {
-                "id": "prj-001",
+            project_id: {
+                "id": project_id,
                 "name": "Galaxy S26 컨셉 테스트",
                 "type": "컨셉 테스트",
                 "purpose": "AI 카메라 기능 반응 검증",
@@ -56,17 +62,22 @@ class MockStore:
             }
         }
         self.personas = {
-            "prs-001": {
-                "id": "prs-001",
-                "project_id": "prj-001",
+            persona_id_1: {
+                "id": persona_id_1,
+                "project_id": project_id,
                 "name": "김민준",
                 "age": 29,
                 "gender": "남성",
                 "occupation": "게임 개발자",
+                "occupation_category": "전문직",
+                "region": "일본",
+                "household_type": "1인 가구",
                 "segment": "MZ 얼리어답터",
                 "keywords": ["고성능", "AI카메라", "멀티태스킹"],
                 "interests": ["모바일 게임", "영상 편집", "AI 자동화"],
                 "preferred_channel": "YouTube",
+                "buy_channel": "자급제",
+                "product_group": "Galaxy S Ultra",
                 "purchase_intent": 91.0,
                 "marketing_acceptance": 84.0,
                 "brand_attitude": 88.0,
@@ -76,17 +87,22 @@ class MockStore:
                 "activity_logs": ["게임 런처 실행", "카메라 비교 리뷰 시청"],
                 "cot": ["고사양 기능 선호", "야간 촬영 중요", "AI 보정 체감 기대"],
             },
-            "prs-002": {
-                "id": "prs-002",
-                "project_id": "prj-001",
+            persona_id_2: {
+                "id": persona_id_2,
+                "project_id": project_id,
                 "name": "이서윤",
                 "age": 37,
                 "gender": "여성",
                 "occupation": "마케터",
+                "occupation_category": "직장인",
+                "region": "대한민국",
+                "household_type": "3인 이상",
                 "segment": "실용 중시 가족형",
                 "keywords": ["육아", "사진", "편의성"],
                 "interests": ["가족 사진", "쇼핑", "여행"],
                 "preferred_channel": "Instagram",
+                "buy_channel": "공식몰",
+                "product_group": "Galaxy S",
                 "purchase_intent": 72.0,
                 "marketing_acceptance": 79.0,
                 "brand_attitude": 82.0,
@@ -98,9 +114,9 @@ class MockStore:
             },
         }
         self.surveys = {
-            "prj-001": [
+            project_id: [
                 {
-                    "id": "q-001",
+                    "id": question_id_1,
                     "text": "Galaxy S26 AI 카메라 컨셉에 대한 인지도는 어느 정도입니까?",
                     "type": "단일선택",
                     "options": ["매우 잘 안다", "어느 정도 안다", "들어봤다", "잘 모른다"],
@@ -108,7 +124,7 @@ class MockStore:
                     "status": "draft",
                 },
                 {
-                    "id": "q-002",
+                    "id": question_id_2,
                     "text": "AI 카메라 컨셉이 구매 의향을 얼마나 높여준다고 느끼십니까?",
                     "type": "리커트척도",
                     "options": ["매우 크다", "크다", "보통", "낮다", "매우 낮다"],
@@ -118,8 +134,8 @@ class MockStore:
             ]
         }
         self.simulations = {
-            "prj-001": {
-                "job_id": "job-001",
+            project_id: {
+                "job_id": simulation_job_id,
                 "status": "running",
                 "progress": 64,
                 "completed_responses": 1182,
@@ -127,12 +143,12 @@ class MockStore:
             }
         }
         self.response_feed = {
-            "prj-001": [
+            project_id: [
                 {
-                    "id": "rsp-001",
+                    "id": response_id_1,
                     "persona_name": "김민준",
                     "segment": "MZ 얼리어답터",
-                    "question_id": "q-002",
+                    "question_id": question_id_2,
                     "question_text": "AI 카메라 컨셉이 구매 의향을 얼마나 높여준다고 느끼십니까?",
                     "selected_option": "매우 크다",
                     "rationale": "게임과 촬영을 동시에 만족시키는 업그레이드로 인식합니다.",
@@ -141,10 +157,10 @@ class MockStore:
                     "cot": ["스펙 민감도 높음", "카메라 성능 체감 기대", "업그레이드 의향 높음"],
                 },
                 {
-                    "id": "rsp-002",
+                    "id": response_id_2,
                     "persona_name": "이서윤",
                     "segment": "실용 중시 가족형",
-                    "question_id": "q-001",
+                    "question_id": question_id_1,
                     "question_text": "Galaxy S26 AI 카메라 컨셉에 대한 인지도는 어느 정도입니까?",
                     "selected_option": "어느 정도 안다",
                     "rationale": "광고에서 생활 사진 개선 메시지를 보고 관심을 가졌습니다.",
@@ -155,9 +171,9 @@ class MockStore:
             ]
         }
         self.reports = {
-            "rpt-001": {
-                "id": "rpt-001",
-                "project_id": "prj-001",
+            report_id: {
+                "id": report_id,
+                "project_id": project_id,
                 "title": "Galaxy S26 컨셉 테스트 리포트",
                 "type": "strategy",
                 "format": "PDF",
@@ -250,10 +266,15 @@ class MockStore:
                 "age": age,
                 "gender": payload["gender"],
                 "occupation": payload["occupation"],
+                "occupation_category": "직장인",
+                "region": "대한민국",
+                "household_type": "1인 가구",
                 "segment": payload["segment"],
                 "keywords": [payload["segment"], payload["occupation"], "AI"],
                 "interests": ["브랜드 탐색", "제품 비교", "온라인 리뷰"],
                 "preferred_channel": "YouTube",
+                "buy_channel": "자급제",
+                "product_group": "Galaxy S",
                 "purchase_intent": purchase_intent,
                 "marketing_acceptance": marketing_acceptance,
                 "brand_attitude": brand_attitude,
@@ -290,6 +311,17 @@ class MockStore:
     def create_report(self, project_id: str) -> dict:
         report_id = f"rpt-{uuid.uuid4().hex[:8]}"
         now = datetime.now(timezone.utc)
+        personas = [persona for persona in self.personas.values() if persona["project_id"] == project_id]
+        responses = self.response_feed.get(project_id, [])
+        simulation = self.simulations.get(project_id)
+        dominant_segment = "데이터 없음"
+        if personas:
+            segment_counts: dict[str, int] = {}
+            for persona in personas:
+                segment = persona["segment"]
+                segment_counts[segment] = segment_counts.get(segment, 0) + 1
+            dominant_segment = sorted(segment_counts.items(), key=lambda item: item[1], reverse=True)[0][0]
+        top_question = responses[0]["question_text"] if responses else "집계 중"
         report = {
             "id": report_id,
             "project_id": project_id,
@@ -299,11 +331,22 @@ class MockStore:
             "size": "4.2MB",
             "created_at": now,
             "sections": [
-                {"id": "overview", "title": "개요", "content": "시뮬레이션 결과 기반 자동 생성 리포트입니다."},
-                {"id": "recommendation", "title": "권장사항", "content": "핵심 타겟 중심 메시지 전략을 추천합니다."},
+                {
+                    "id": "overview",
+                    "title": "개요",
+                    "content": f"{self.projects[project_id]['name']} 프로젝트는 {len(personas)}명의 페르소나와 {len(responses)}건의 응답을 기반으로 집계되었습니다.",
+                },
+                {
+                    "id": "recommendation",
+                    "title": "권장사항",
+                    "content": f"가장 큰 세그먼트는 {dominant_segment}이며, 우선 검토 문항은 '{top_question}' 입니다.",
+                },
             ],
-            "kpis": [{"label": "응답률", "value": "64%"}, {"label": "구매 의향", "value": "68.7%"}],
-            "charts": [{"id": "chart-01", "type": "bar", "title": "응답 분포"}],
+            "kpis": [
+                {"label": "응답 진행률", "value": f"{simulation['progress'] if simulation else 0}%"},
+                {"label": "목표 응답 수", "value": str(self.projects[project_id]["target_responses"])},
+            ],
+            "charts": [{"id": "chart-01", "type": "bar", "title": top_question}],
         }
         self.reports[report_id] = report
         self.projects[project_id]["reports_count"] += 1
@@ -321,13 +364,19 @@ class MockStore:
             "age": persona["age"],
             "gender": persona["gender"],
             "occupation": persona["occupation"],
+            "occupation_category": persona["occupation_category"],
+            "region": persona["region"],
+            "household_type": persona["household_type"],
             "segment": persona["segment"],
             "keywords": persona["keywords"],
             "interests": persona["interests"],
             "preferred_channel": persona["preferred_channel"],
+            "buy_channel": persona["buy_channel"],
+            "product_group": persona["product_group"],
             "purchase_intent": persona["purchase_intent"],
             "marketing_acceptance": persona["marketing_acceptance"],
             "brand_attitude": persona["brand_attitude"],
+            "churn_risk": churn_risk,
             "score": {
                 "churn_risk": churn_risk,
                 "engagement_score": engagement_score,

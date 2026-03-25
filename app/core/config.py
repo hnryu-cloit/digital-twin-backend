@@ -14,7 +14,10 @@ class Settings(BaseSettings):
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
-    PERSONAS_JSON_PATH: str = "../digital-twin-ai/scripts/output/personas.json"
+    PERSONAS_JSON_PATH: str = "../digital-twin-ai/output/personas.json"
+    AI_PIPELINE_PROJECT_DIR: str = "digital-twin-ai"
+    AI_PIPELINE_OUTPUT_DIR: str = "output"
+    AI_PIPELINE_EXCEL_PATH: str = "data/Digital Customer Twin.xlsx"
     CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
 
     DEFAULT_ADMIN_EMAIL: str = "admin@digital-twin.ai"

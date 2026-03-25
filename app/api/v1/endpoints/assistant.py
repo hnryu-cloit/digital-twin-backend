@@ -4,6 +4,7 @@ import uuid
 
 from fastapi import APIRouter, Depends
 
+from app.core.defaults import DEFAULT_PROMPTS
 from app.core.dependencies import get_current_user_id
 from app.schemas.assistant import AssistantChatRequest, AssistantChatResponse
 from app.services import gemini_client
@@ -11,7 +12,40 @@ from app.services.db_store import store
 
 router = APIRouter(prefix="/assistant", tags=["assistant"])
 
-_DEFAULT_SYSTEM_PROMPT = "Answer with evidence and confidence."
+
+def _build_fallback_chat_response() -> tuple[str, list[dict[str, str]], int]:
+    projects = store.list_projects()
+    project = projects[0] if projects else None
+    if not project:
+        return (
+            "현재 연결된 프로젝트 데이터가 없어 분석 요약을 생성할 수 없습니다.",
+            [{"label": "프로젝트 상태", "value": "데이터 없음"}],
+            40,
+        )
+
+    personas = store.list_personas(project["id"])
+    reports = store.list_reports(project["id"])
+    simulation = store.get_simulation(project["id"])
+    top_segment = "데이터 없음"
+    if personas:
+        segment_counts: dict[str, int] = {}
+        for persona in personas:
+            segment = persona.get("segment") or "미분류"
+            segment_counts[segment] = segment_counts.get(segment, 0) + 1
+        top_segment = sorted(segment_counts.items(), key=lambda item: item[1], reverse=True)[0][0]
+
+    answer = (
+        f"현재 프로젝트 '{project['name']}' 기준으로 가장 큰 세그먼트는 {top_segment}이며, "
+        f"응답 진행률은 {project.get('progress', 0)}%입니다."
+    )
+    evidence = [
+        {"label": "프로젝트", "value": project["name"]},
+        {"label": "페르소나 수", "value": str(len(personas))},
+        {"label": "리포트 수", "value": str(len(reports))},
+    ]
+    if simulation:
+        evidence.append({"label": "완료 응답", "value": str(simulation.get("completed_responses", 0))})
+    return answer, evidence, 78
 
 
 @router.post("/chat", response_model=AssistantChatResponse)
@@ -23,7 +57,7 @@ async def chat(body: AssistantChatRequest, _: str = Depends(get_current_user_id)
     # Gemini로 실제 답변 생성 시도
     if gemini_client.is_available():
         try:
-            system_prompt = store.get_setting("prompt:assistant", _DEFAULT_SYSTEM_PROMPT)
+            system_prompt = store.get_setting("prompt:assistant", DEFAULT_PROMPTS["assistant"])
             # 최근 6개 대화 이력을 컨텍스트로 포함
             recent = messages[-6:] if len(messages) >= 6 else messages[:]
             history_text = "\n".join(
@@ -59,16 +93,12 @@ async def chat(body: AssistantChatRequest, _: str = Depends(get_current_user_id)
         except Exception:
             pass
 
-    # 폴백
-    answer = "현재 프로젝트 기준으로 구매 의향이 높은 세그먼트는 MZ 얼리어답터이며, AI 카메라 효용 메시지가 가장 효과적입니다."
+    answer, evidence, confidence = _build_fallback_chat_response()
     messages.append({"role": "assistant", "message": answer})
 
     return AssistantChatResponse(
         session_id=session_id,
         answer=answer,
-        evidence=[
-            {"label": "구매 의향", "value": "68.7%"},
-            {"label": "응답 정합성", "value": "98.4%"},
-        ],
-        confidence=92,
+        evidence=evidence,
+        confidence=confidence,
     )

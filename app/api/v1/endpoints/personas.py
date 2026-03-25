@@ -1,17 +1,74 @@
+from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 
 from app.core.dependencies import get_current_user_id
+from app.schemas.ai_job import AIJobResponse
 from app.schemas.persona import (
     PersonaDetailResponse,
+    PersonaGenerateJobRequest,
     PersonaListResponse,
     PersonaPoolCreateRequest,
     PersonaResponse,
 )
+from app.services.ai_pipeline_service import run_persona_generation_pipeline
 from app.services.db_store import store
 
 router = APIRouter(prefix="/personas", tags=["personas"])
+
+
+def _run_generate_persona_job(job_id: str) -> None:
+    job = store.get_ai_job(job_id)
+    if job is None or job["status"] == "cancelled":
+        return
+
+    store.update_ai_job(
+        job_id,
+        status="running",
+        progress=10,
+        started_at=datetime.now(timezone.utc),
+    )
+    try:
+        result_ref = run_persona_generation_pipeline(job["project_id"], job.get("payload", {}))
+        latest_job = store.get_ai_job(job_id)
+        if latest_job and latest_job["status"] == "cancelled":
+            return
+        store.update_ai_job(
+            job_id,
+            status="completed",
+            progress=100,
+            result_ref=result_ref,
+            completed_at=datetime.now(timezone.utc),
+        )
+    except Exception as error:
+        store.update_ai_job(
+            job_id,
+            status="failed",
+            progress=100,
+            error_code="PERSONA_GENERATION_FAILED",
+            error_message=str(error),
+            completed_at=datetime.now(timezone.utc),
+        )
+
+
+@router.post("/generate-job", response_model=AIJobResponse, status_code=status.HTTP_202_ACCEPTED)
+async def generate_personas_job(
+    body: PersonaGenerateJobRequest,
+    background_tasks: BackgroundTasks,
+    user_id: str = Depends(get_current_user_id),
+):
+    if not store.get_project(body.project_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
+
+    job = store.create_ai_job(
+        project_id=body.project_id,
+        job_type="persona_generate",
+        payload=body.model_dump(),
+        created_by=user_id,
+    )
+    background_tasks.add_task(_run_generate_persona_job, job["id"])
+    return AIJobResponse(**job)
 
 
 @router.post("/pool", response_model=PersonaListResponse, status_code=status.HTTP_201_CREATED)

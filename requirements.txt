@@ -24,6 +24,7 @@ pyarrow==18.0.0
 
 # Utils
 pydantic==2.10.1
+email-validator==2.3.0
 pydantic-settings==2.6.1
 python-dotenv==1.0.1
 httpx==0.28.0
