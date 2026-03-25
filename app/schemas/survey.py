@@ -15,6 +15,16 @@ class SurveyQuestionResponse(SurveyQuestionRequest):
     status: str
 
 
+class SurveyDraftEvidenceResponse(BaseModel):
+    label: str
+    value: str
+
+
+class SurveyDraftQuestionResponse(SurveyQuestionResponse):
+    rationale: str
+    evidence: list[SurveyDraftEvidenceResponse] = Field(default_factory=list)
+
+
 class SurveyGenerateRequest(BaseModel):
     project_id: str
     prompt: str = Field(min_length=1)
@@ -39,6 +49,17 @@ class SurveyUpdateWithAiRequest(BaseModel):
 class SurveyQuestionListResponse(BaseModel):
     project_id: str
     questions: list[SurveyQuestionResponse]
+
+
+class SurveyDraftPreviewResponse(BaseModel):
+    project_id: str
+    status: str
+    summary: str
+    questions: list[SurveyDraftQuestionResponse]
+
+
+class SurveyDraftSaveRequest(BaseModel):
+    questions: list[SurveyQuestionRequest]
 
 
 class SurveyConfirmRequest(BaseModel):

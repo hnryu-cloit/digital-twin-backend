@@ -10,6 +10,9 @@ from app.schemas.ai_job import AIJobResponse
 from app.schemas.survey import (
     SurveyAiUpdateResponse,
     SurveyConfirmRequest,
+    SurveyDraftPreviewResponse,
+    SurveyDraftQuestionResponse,
+    SurveyDraftSaveRequest,
     SurveyGenerateJobRequest,
     SurveyGenerateRequest,
     SurveyQuestionListResponse,
@@ -21,6 +24,13 @@ from app.services import gemini_client
 from app.services.db_store import store
 
 router = APIRouter(prefix="/surveys", tags=["surveys"])
+
+QUESTION_TYPE_REASON = {
+    "단일선택": "핵심 선호를 빠르게 비교하기 위한 단일 선택 문항입니다.",
+    "복수선택": "복수 동기를 함께 수집해 우선순위와 조합 패턴을 파악하기 위한 문항입니다.",
+    "리커트척도": "태도 강도와 변화 폭을 정량적으로 측정하기 위한 척도 문항입니다.",
+    "주관식": "정량 응답으로 포착되지 않는 표현과 우려 요인을 수집하기 위한 서술형 문항입니다.",
+}
 
 
 def _fallback_question_templates(survey_type: str) -> list[tuple[str, list[str]]]:
@@ -84,6 +94,45 @@ def _compose_generation_prompt(
         f"리서치 템플릿 ID: {template_id}\n"
         f"필수 블록: {required_blocks}\n"
         f"세그먼트 분석 컨텍스트: {segment_summary}"
+    )
+
+
+def _build_question_rationale(question: dict) -> str:
+    base_reason = QUESTION_TYPE_REASON.get(question["type"], "리서치 의도를 반영하기 위한 문항입니다.")
+    if question["status"] == "confirmed":
+        return f"{base_reason} 현재 확정 상태로 저장되어 후속 시뮬레이션과 분석에 사용할 수 있습니다."
+    return f"{base_reason} 현재는 draft 상태이므로 확정 전에 표현을 조정할 수 있습니다."
+
+
+def _build_question_evidence(question: dict) -> list[dict[str, str]]:
+    option_count = len(question.get("options", []))
+    return [
+        {"label": "문항 유형", "value": question["type"]},
+        {"label": "선택지 수", "value": str(option_count)},
+        {"label": "문항 상태", "value": question["status"]},
+        {"label": "표시 순서", "value": str(question["order"])},
+    ]
+
+
+def _build_preview_response(project_id: str) -> SurveyDraftPreviewResponse:
+    questions = store.list_survey_questions(project_id)
+    status = "confirmed" if questions and all(item["status"] == "confirmed" for item in questions) else "draft"
+    summary = (
+        f"총 {len(questions)}개 문항으로 구성된 설문 초안입니다. "
+        "질문별 근거를 검토한 뒤 확정하면 이후 시뮬레이션과 리포트 흐름에서 사용할 수 있습니다."
+    )
+    return SurveyDraftPreviewResponse(
+        project_id=project_id,
+        status=status,
+        summary=summary,
+        questions=[
+            SurveyDraftQuestionResponse(
+                **item,
+                rationale=_build_question_rationale(item),
+                evidence=_build_question_evidence(item),
+            )
+            for item in questions
+        ],
     )
 
 
@@ -245,6 +294,38 @@ async def create_question(
     return SurveyQuestionResponse(**question)
 
 
+@router.put("/{project_id}/questions", response_model=SurveyQuestionListResponse)
+async def replace_questions(
+    project_id: str,
+    body: SurveyDraftSaveRequest,
+    _: str = Depends(get_current_user_id),
+):
+    if not store.get_project(project_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
+
+    existing = store.list_survey_questions(project_id)
+    existing_ids = [item["id"] for item in existing]
+    persisted = []
+    for index, question in enumerate(body.questions, start=1):
+        question_id = existing_ids[index - 1] if index - 1 < len(existing_ids) else f"q-{uuid.uuid4().hex[:8]}"
+        persisted.append(
+            {
+                "id": question_id,
+                "text": question.text,
+                "type": question.type,
+                "options": question.options,
+                "order": index,
+                "status": "draft",
+            }
+        )
+
+    saved = store.replace_survey_questions(project_id, persisted)
+    return SurveyQuestionListResponse(
+        project_id=project_id,
+        questions=[SurveyQuestionResponse(**item) for item in saved],
+    )
+
+
 @router.get("/{project_id}/questions", response_model=SurveyQuestionListResponse)
 async def list_questions(project_id: str, _: str = Depends(get_current_user_id)):
     return SurveyQuestionListResponse(
@@ -336,9 +417,6 @@ async def confirm_survey(body: SurveyConfirmRequest, _: str = Depends(get_curren
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.get("/{project_id}/preview", response_model=SurveyQuestionListResponse)
+@router.get("/{project_id}/preview", response_model=SurveyDraftPreviewResponse)
 async def preview_survey(project_id: str, _: str = Depends(get_current_user_id)):
-    return SurveyQuestionListResponse(
-        project_id=project_id,
-        questions=[SurveyQuestionResponse(**item) for item in store.list_survey_questions(project_id)],
-    )
+    return _build_preview_response(project_id)
