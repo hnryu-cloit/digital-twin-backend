@@ -96,6 +96,40 @@ Docs: `http://localhost:8000/docs`
 
 > `GEMINI_API_KEY` 미설정 시 모든 AI 기능은 규칙 기반 폴백으로 동작합니다.
 
+## Service Communication
+
+현재 구조
+
+- `front -> backend`: REST API 호출로 직접 연동
+- `backend -> Gemini`: 설문 생성, 설문 수정, 시뮬레이션 인사이트, 어시스턴트 응답에서 직접 호출
+- `ai-service -> file output`: `digital-twin-ai`는 `personas.json` 등 산출물을 파일로 생성
+- `backend -> ai output file`: `PERSONAS_JSON_PATH` 기준으로 AI 산출 파일을 읽을 수 있음
+
+중요한 점
+
+- 현재는 `front <-> backend <-> ai-service` 형태의 실시간 서비스 간 RPC/HTTP 오케스트레이션이 완성된 상태는 아닙니다.
+- 현 구조는 `front -> backend` 실시간 API + `ai-service -> shared output file` + `backend -> output file import` 조합에 가깝습니다.
+
+향후 목표 구조
+
+- `front -> backend`: 조사 생성, 세그먼트 분석 요청, AI 설문 초안 생성 요청
+- `backend -> ai-service`: 비동기 작업 요청, 상태 조회, 결과 수집
+- `ai-service -> backend`: 생성 완료 결과를 API 또는 queue/event 기준으로 반영
+- `backend -> front`: job status, preview, confirmed survey, generated personas/report payload 반환
+
+AgentGo product system 관점의 권장 반영 범위
+
+- AI 오케스트레이션 계층을 `backend`에 명시하고, `ai-service`는 독립 worker/service로 취급
+- 설문 설계는 `segment analysis + research template + user prompt`를 합성한 입력 계약으로 표준화
+- 파일 공유 기반 연동은 초기 단계 fallback으로 유지하되, 장기적으로는 `job orchestration + callback/polling API` 구조로 이관
+- 프론트는 직접 AI를 호출하지 않고 반드시 backend contract를 통해 요청/상태/결과를 받도록 유지
+- `survey generate`, `persona generation`, `report generation`은 공통 job lifecycle (`queued/running/completed/failed`)을 따르도록 설계
+
+상세 초안 문서:
+
+- [`docs/ai-orchestration.md`](../docs/ai-orchestration.md)
+  - AgentGo product system 작업가이드와 API-first 원칙 포함
+
 ## Notes
 
 - Default admin: `admin@digital-twin.ai` / `Admin1234!`
