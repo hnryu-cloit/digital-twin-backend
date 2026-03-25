@@ -727,6 +727,79 @@ class DbStore:
 
             response_progress = simulation.progress if simulation else (proj.progress if proj else 0)
             target_responses = proj.target_responses if proj else 0
+            keyword_items = self.get_response_keywords(project_id, limit=5)
+            questions = (
+                session.query(SurveyQuestionModel)
+                .filter_by(project_id=project_id)
+                .order_by(SurveyQuestionModel.order)
+                .all()
+            )
+
+            age_buckets = {"20대": 0, "30대": 0, "40대": 0, "50대+": 0}
+            for persona in personas:
+                if persona.age < 30:
+                    age_buckets["20대"] += 1
+                elif persona.age < 40:
+                    age_buckets["30대"] += 1
+                elif persona.age < 50:
+                    age_buckets["40대"] += 1
+                else:
+                    age_buckets["50대+"] += 1
+            highest_age_bucket = max(age_buckets.values(), default=1) or 1
+
+            segment_cards = []
+            if personas:
+                segment_groups: dict[str, list[PersonaModel]] = {}
+                for persona in personas:
+                    segment_groups.setdefault(persona.segment or "미분류", []).append(persona)
+                for segment_name, members in sorted(segment_groups.items(), key=lambda item: len(item[1]), reverse=True)[:3]:
+                    channel_counts: dict[str, int] = {}
+                    product_counts: dict[str, int] = {}
+                    region_counts: dict[str, int] = {}
+                    for member in members:
+                        channel_counts[member.buy_channel or "데이터 없음"] = channel_counts.get(member.buy_channel or "데이터 없음", 0) + 1
+                        product_counts[member.product_group or "데이터 없음"] = product_counts.get(member.product_group or "데이터 없음", 0) + 1
+                        region_counts[member.region or "데이터 없음"] = region_counts.get(member.region or "데이터 없음", 0) + 1
+                    segment_cards.append(
+                        {
+                            "segment": segment_name,
+                            "count": len(members),
+                            "share": round((len(members) / persona_count) * 100, 1) if persona_count else 0.0,
+                            "buyChannel": sorted(channel_counts.items(), key=lambda item: item[1], reverse=True)[0][0],
+                            "productGroup": sorted(product_counts.items(), key=lambda item: item[1], reverse=True)[0][0],
+                            "region": sorted(region_counts.items(), key=lambda item: item[1], reverse=True)[0][0],
+                        }
+                    )
+
+            keyword_chart_data = [
+                {
+                    "subject": item["keyword"],
+                    "dominant": item["frequency"],
+                    "baseline": 50,
+                    "fullMark": 100,
+                }
+                for item in keyword_items
+            ]
+
+            question_strength_data = []
+            detailed_distribution = []
+            for question in questions[:7]:
+                distribution = self.get_response_distribution(project_id, question.id)
+                top_value = max((item["value"] for item in distribution), default=0)
+                question_strength_data.append(
+                    {
+                        "label": question.id,
+                        "value": top_value,
+                    }
+                )
+                if distribution:
+                    detailed_distribution.append(
+                        {
+                            "question_id": question.id,
+                            "question_text": question.text,
+                            "distribution": distribution,
+                        }
+                    )
 
             report = ReportModel(
                 id=report_id,
@@ -738,21 +811,58 @@ class DbStore:
                 created_at=now,
                 sections=[
                     {
-                        "id": "overview",
-                        "title": "개요",
+                        "id": "summary",
+                        "title": "종합 분석 요약",
                         "content": f"{project_name} 프로젝트는 현재 {persona_count}명의 페르소나와 {response_count}건의 시뮬레이션 응답을 기반으로 집계되었습니다.",
                     },
                     {
-                        "id": "recommendation",
-                        "title": "권장사항",
+                        "id": "findings",
+                        "title": "전략적 핵심 인사이트",
                         "content": f"가장 큰 세그먼트는 {dominant_segment}이며, 우선 검토 문항은 '{top_question or '집계 중'}' 입니다.",
+                        "evidence": [
+                            {"label": "최대 세그먼트", "value": dominant_segment},
+                            {"label": "우선 문항", "value": top_question or "집계 중"},
+                            {"label": "응답 진행률", "value": f"{response_progress}%"},
+                        ],
+                        "action": f"{dominant_segment} 세그먼트를 기준으로 메시지와 채널 전략을 우선 정렬합니다.",
+                    },
+                    {
+                        "id": "detail",
+                        "title": "데이터 기반 상세 분석",
+                        "content": f"연령대별 분포와 문항별 우세 응답을 결합해 세그먼트별 기회 지점을 해석할 수 있습니다.",
+                    },
+                    {
+                        "id": "segment",
+                        "title": "세그먼트 기회 매트릭스",
+                        "content": f"상위 세그먼트 {len(segment_cards)}개를 대상으로 구매 채널, 제품군, 지역 단위 액션을 정리했습니다.",
                     },
                 ],
                 kpis=[
                     {"label": "응답 진행률", "value": f"{response_progress}%"},
                     {"label": "목표 응답 수", "value": str(target_responses)},
+                    {"label": "총 페르소나 수", "value": str(persona_count)},
+                    {"label": "총 시뮬레이션 응답", "value": str(response_count)},
                 ],
-                charts=[{"id": "chart-01", "type": "bar", "title": top_question or "응답 분포"}],
+                charts=[
+                    {"id": "keyword-radar", "type": "radar", "title": "상위 키워드 레이더", "data": keyword_chart_data},
+                    {"id": "question-strength", "type": "area", "title": "문항별 우세 응답 강도", "data": question_strength_data},
+                    {
+                        "id": "age-distribution",
+                        "type": "bar",
+                        "title": "연령대별 분석 대상 규모",
+                        "data": [
+                            {"name": name, "value": value, "benchmark": highest_age_bucket}
+                            for name, value in age_buckets.items()
+                        ],
+                    },
+                    {
+                        "id": "question-distribution",
+                        "type": "distribution",
+                        "title": top_question or "응답 분포",
+                        "data": detailed_distribution,
+                    },
+                    {"id": "segment-cards", "type": "segment", "title": "세그먼트 기회 매트릭스", "data": segment_cards},
+                ],
             )
             session.add(report)
             if proj:
