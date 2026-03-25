@@ -102,13 +102,14 @@ Docs: `http://localhost:8000/docs`
 
 - `front -> backend`: REST API 호출로 직접 연동
 - `backend -> Gemini`: 설문 생성, 설문 수정, 시뮬레이션 인사이트, 어시스턴트 응답에서 직접 호출
-- `ai-service -> file output`: `digital-twin-ai`는 `personas.json` 등 산출물을 파일로 생성
-- `backend -> ai output file`: `PERSONAS_JSON_PATH` 기준으로 AI 산출 파일을 읽을 수 있음
+- `backend -> ai-service`: 페르소나 생성 job은 HTTP API로 `digital-twin-ai`를 호출
+- `ai-service -> file output`: `digital-twin-ai`는 `personas.json` 등 산출물을 파일로 생성하고, 동시에 HTTP 응답으로 결과 payload를 반환
+- `backend -> ai output file`: 파일 경로 설정은 fallback 호환용으로 유지됨
 
 중요한 점
 
-- 현재는 `front <-> backend <-> ai-service` 형태의 실시간 서비스 간 RPC/HTTP 오케스트레이션이 완성된 상태는 아닙니다.
-- 현 구조는 `front -> backend` 실시간 API + `ai-service -> shared output file` + `backend -> output file import` 조합에 가깝습니다.
+- 현재는 `front -> backend -> ai-service` 경로가 persona generation 기준으로 구현됐다.
+- 다만 survey/report는 아직 backend 내부 job 또는 직접 AI 호출이 남아 있어, 제품 전체가 완전히 통일된 오케스트레이션 구조는 아니다.
 
 향후 목표 구조
 

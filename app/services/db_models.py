@@ -98,6 +98,7 @@ class PersonaModel(Base):
     future_value = Column(Float, default=0.0)
     profile = Column(Text, default="")
     purchase_history = Column(JSON, default=list)
+    individual_stories = Column(JSON, default=list)
     activity_logs = Column(JSON, default=list)
     cot = Column(JSON, default=list)
 
@@ -124,6 +125,7 @@ class PersonaModel(Base):
             "future_value": self.future_value,
             "profile": self.profile,
             "purchase_history": self.purchase_history or [],
+            "individual_stories": self.individual_stories or [],
             "activity_logs": self.activity_logs or [],
             "cot": self.cot or [],
         }

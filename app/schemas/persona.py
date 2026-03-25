@@ -35,6 +35,7 @@ class PersonaResponse(BaseModel):
 class PersonaDetailResponse(PersonaResponse):
     profile: str
     purchase_history: list[str]
+    individual_stories: list[dict] = Field(default_factory=list)
     activity_logs: list[str]
     cot: list[str]
 

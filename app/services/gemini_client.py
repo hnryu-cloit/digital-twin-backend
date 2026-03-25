@@ -19,7 +19,7 @@ def _get_model():
         import google.generativeai as genai
 
         genai.configure(api_key=settings.GEMINI_API_KEY)
-        _model = genai.GenerativeModel("gemini-1.5-flash")
+        _model = genai.GenerativeModel("gemini-3.0-flash")
         logger.info("Gemini 초기화 완료")
         return _model
     except Exception as e:

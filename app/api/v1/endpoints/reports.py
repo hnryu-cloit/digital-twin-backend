@@ -1,19 +1,70 @@
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 
 from app.core.dependencies import get_current_user_id
+from app.schemas.ai_job import AIJobResponse
 from app.schemas.report import (
     ReportDetailResponse,
     ReportDownloadResponse,
+    ReportGenerateJobRequest,
     ReportGenerateRequest,
     ReportListResponse,
     ReportSummaryResponse,
 )
+from app.services.ai_pipeline_service import run_report_generation
 from app.services.db_store import store
 
 router = APIRouter(prefix="/reports", tags=["reports"])
+
+
+def _run_generate_report_job(job_id: str) -> None:
+    job = store.get_ai_job(job_id)
+    if job is None or job["status"] == "cancelled":
+        return
+    store.update_ai_job(
+        job_id,
+        status="running",
+        progress=15,
+        started_at=datetime.now(timezone.utc),
+    )
+    try:
+        result_ref = run_report_generation(job["project_id"], {**(job.get("payload", {}) or {}), "job_id": job_id})
+        store.update_ai_job(
+            job_id,
+            status="completed",
+            progress=100,
+            result_ref=result_ref,
+            completed_at=datetime.now(timezone.utc),
+        )
+    except Exception as error:
+        store.update_ai_job(
+            job_id,
+            status="failed",
+            progress=100,
+            error_code="REPORT_GENERATION_FAILED",
+            error_message=str(error),
+            completed_at=datetime.now(timezone.utc),
+        )
+
+
+@router.post("/generate-job", response_model=AIJobResponse, status_code=status.HTTP_202_ACCEPTED)
+async def generate_report_job(
+    body: ReportGenerateJobRequest,
+    background_tasks: BackgroundTasks,
+    user_id: str = Depends(get_current_user_id),
+):
+    if not store.get_project(body.project_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
+    job = store.create_ai_job(
+        project_id=body.project_id,
+        job_type="report_generate",
+        payload=body.model_dump(),
+        created_by=user_id,
+    )
+    background_tasks.add_task(_run_generate_report_job, job["id"])
+    return AIJobResponse(**job)
 
 
 @router.post("/generate", response_model=ReportSummaryResponse, status_code=status.HTTP_201_CREATED)

@@ -10,6 +10,7 @@ PERSONA_COLUMN_DEFS: dict[str, str] = {
     "household_type": "VARCHAR DEFAULT ''",
     "buy_channel": "VARCHAR DEFAULT ''",
     "product_group": "VARCHAR DEFAULT ''",
+    "individual_stories": "JSON DEFAULT '[]'",
 }
 
 SURVEY_QUESTION_COLUMN_DEFS: dict[str, str] = {
@@ -100,13 +101,13 @@ def ensure_sqlite_persona_dimensions(db_path: str | Path) -> bool:
         rows = cursor.execute(
             """
             SELECT id, age, occupation, segment, preferred_channel, purchase_history,
-                   occupation_category, region, household_type, buy_channel, product_group
+                   occupation_category, region, household_type, buy_channel, product_group, individual_stories
             FROM personas
             """
         ).fetchall()
 
         for row in rows:
-            persona_id, age, occupation, segment, preferred_channel, purchase_history, occupation_category, region, household_type, buy_channel, product_group = row
+            persona_id, age, occupation, segment, preferred_channel, purchase_history, occupation_category, region, household_type, buy_channel, product_group, individual_stories = row
             purchase_history_text = purchase_history or ""
             if not occupation_category:
                 cursor.execute(
@@ -132,6 +133,11 @@ def ensure_sqlite_persona_dimensions(db_path: str | Path) -> bool:
                 cursor.execute(
                     "UPDATE personas SET product_group = ? WHERE id = ?",
                     (_derive_product_group(purchase_history_text), persona_id),
+                )
+            if not individual_stories:
+                cursor.execute(
+                    "UPDATE personas SET individual_stories = ? WHERE id = ?",
+                    ("[]", persona_id),
                 )
 
         conn.commit()

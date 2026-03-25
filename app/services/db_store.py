@@ -406,6 +406,7 @@ class DbStore:
                     future_value=float(persona.get("future_value", 0.0)),
                     profile=description,
                     purchase_history=purchase_history,
+                    individual_stories=persona.get("individual_stories", []),
                     activity_logs=persona.get("key_characteristics", []),
                     cot=[
                         "AI pipeline cluster stats analyzed",
@@ -429,7 +430,14 @@ class DbStore:
             if p is None:
                 return None
             d = p.to_dict()
-            return {**_build_persona_response(d), "profile": d["profile"], "purchase_history": d["purchase_history"], "activity_logs": d["activity_logs"], "cot": d["cot"]}
+            return {
+                **_build_persona_response(d),
+                "profile": d["profile"],
+                "purchase_history": d["purchase_history"],
+                "individual_stories": d.get("individual_stories", []),
+                "activity_logs": d["activity_logs"],
+                "cot": d["cot"],
+            }
 
     # ── Surveys ───────────────────────────────────────────────────────────────
     def list_survey_questions(self, project_id: str) -> list[dict]:
@@ -874,6 +882,30 @@ class DbStore:
                     },
                     {"id": "segment-cards", "type": "segment", "title": "세그먼트 기회 매트릭스", "data": segment_cards},
                 ],
+            )
+            session.add(report)
+            if proj:
+                proj.reports_count = (proj.reports_count or 0) + 1
+                proj.updated_at = now
+            session.commit()
+            return report.to_dict()
+
+    def create_report_from_payload(self, project_id: str, payload: dict) -> dict:
+        report_id = f"rpt-{uuid.uuid4().hex[:8]}"
+        now = _now()
+        with SessionLocal() as session:
+            proj = session.query(ProjectModel).filter_by(id=project_id).first()
+            report = ReportModel(
+                id=report_id,
+                project_id=project_id,
+                title=payload.get("title") or f"{(proj.name if proj else project_id)} 리포트",
+                type=payload.get("type", "strategy"),
+                format=payload.get("format", "PDF"),
+                size=payload.get("size", "4.2MB"),
+                created_at=now,
+                sections=payload.get("sections", []),
+                kpis=payload.get("kpis", []),
+                charts=payload.get("charts", []),
             )
             session.add(report)
             if proj:

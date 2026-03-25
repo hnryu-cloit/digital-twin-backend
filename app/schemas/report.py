@@ -1,6 +1,11 @@
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+class ReportGenerateJobRequest(BaseModel):
+    project_id: str
+    report_type: str = Field(default="strategy")
 
 
 class ReportSummaryResponse(BaseModel):

@@ -22,6 +22,7 @@ from app.schemas.survey import (
     SurveyUpdateWithAiRequest,
 )
 from app.services import gemini_client
+from app.services.ai_pipeline_service import run_survey_generation
 from app.services.db_store import store
 
 router = APIRouter(prefix="/surveys", tags=["surveys"])
@@ -249,23 +250,15 @@ def _run_generate_survey_job(job_id: str) -> None:
         started_at=datetime.now(timezone.utc),
     )
     try:
-        questions = _generate_questions(
+        questions_result = run_survey_generation(
             project_id=job["project_id"],
-            user_prompt=payload.get("user_prompt", ""),
-            survey_type=payload.get("survey_type", "concept"),
-            question_count=payload.get("question_count", 5),
-            template=payload.get("template", {}),
-            segment_context=payload.get("segment_context", {}),
+            payload={**payload, "job_id": job_id},
         )
         store.update_ai_job(
             job_id,
             status="completed",
             progress=100,
-            result_ref={
-                "resource": "survey_questions",
-                "project_id": job["project_id"],
-                "question_count": len(questions),
-            },
+            result_ref=questions_result,
             completed_at=datetime.now(timezone.utc),
         )
     except Exception as error:
