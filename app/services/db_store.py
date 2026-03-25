@@ -306,9 +306,12 @@ class DbStore:
             proj.updated_at = _now()
 
     # ── Personas ──────────────────────────────────────────────────────────────
-    def list_personas(self, project_id: str) -> list[dict]:
+    def list_personas(self, project_id: str | None = None) -> list[dict]:
         with SessionLocal() as session:
-            personas = session.query(PersonaModel).filter_by(project_id=project_id).all()
+            query = session.query(PersonaModel)
+            if project_id:
+                query = query.filter_by(project_id=project_id)
+            personas = query.all()
             return [_build_persona_response(p.to_dict()) for p in personas]
 
     def create_persona_pool(self, payload: dict) -> list[dict]:
@@ -389,7 +392,7 @@ class DbStore:
                     project_id=project_id,
                     name=name,
                     age=age,
-                    gender=_infer_gender(description),
+                    gender=persona.get("gender") or _infer_gender(description),
                     occupation=occupation,
                     occupation_category=_derive_occupation_category(occupation, age),
                     region=region,

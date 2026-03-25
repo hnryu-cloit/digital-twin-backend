@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -7,6 +8,8 @@ import httpx
 
 from app.core.config import settings
 from app.services.db_store import store
+
+logger = logging.getLogger(__name__)
 
 
 def _repo_root() -> Path:
@@ -48,17 +51,30 @@ def run_persona_generation_pipeline(project_id: str, payload: dict[str, Any]) ->
         raise RuntimeError(f"AI service request failed: {error}") from error
 
     result = response.json()
-    personas = result.get("personas", [])
+    cluster_personas = result.get("personas", [])
+
+    # clustered_customers.parquet 경로 찾기 (AI 컨테이너 경로 → 백엔드 마운트 경로로 변환)
+    artifacts = result.get("artifacts", {})
+    clustered_path_raw = artifacts.get("clustered_data", "")
+    personas_json_base = Path(settings.PERSONAS_JSON_PATH).parent  # e.g. /ai/output
+    clustered_path = personas_json_base / "clustered_customers.parquet"
+    if clustered_path_raw:
+        # AI가 반환한 절대경로의 파일명만 사용
+        clustered_path = personas_json_base / Path(clustered_path_raw).name
+
+    individual_personas = _build_individual_personas(cluster_personas, clustered_path)
+    personas_to_save = individual_personas if individual_personas else cluster_personas
+
     normalized_personas = store.replace_personas(
         project_id,
-        personas,
+        personas_to_save,
         overwrite_existing=payload.get("overwrite_existing", True),
     )
     return {
         "resource": "personas",
         "project_id": project_id,
         "persona_count": len(normalized_personas),
-        "artifacts": result.get("artifacts", {}),
+        "artifacts": artifacts,
         "metadata": {
             "random_state": request_payload["random_state"],
             "n_synthetic_customers": request_payload["n_synthetic_customers"],
@@ -67,6 +83,177 @@ def run_persona_generation_pipeline(project_id: str, payload: dict[str, Any]) ->
             "ai_service": settings.AI_SERVICE_BASE_URL,
             "pipeline": result.get("metadata", {}),
         },
+    }
+
+
+def _build_individual_personas(cluster_personas: list[dict], clustered_path: Path) -> list[dict]:
+    """clustered_customers.parquet의 개별 고객을 페르소나 레코드로 변환."""
+    try:
+        import pandas as pd  # noqa: PLC0415
+
+        if not clustered_path.exists():
+            logger.warning("clustered_customers.parquet not found at %s", clustered_path)
+            return []
+
+        df = pd.read_parquet(clustered_path)
+        if "persona_cluster" not in df.columns:
+            logger.warning("persona_cluster column missing in parquet")
+            return []
+
+        # cluster_id → cluster persona 매핑
+        cluster_map = {p["cluster_id"]: p for p in cluster_personas}
+
+        # 클러스터별 인덱스 카운터
+        cluster_counters: dict[int, int] = {}
+        individual_personas: list[dict] = []
+
+        for _, row in df.iterrows():
+            cluster_id = int(row["persona_cluster"])
+            cluster_persona = cluster_map.get(cluster_id)
+            if cluster_persona is None:
+                continue
+
+            cluster_counters[cluster_id] = cluster_counters.get(cluster_id, 0) + 1
+            n = cluster_counters[cluster_id]
+
+            age = int(row.get("usr_age", 30))
+            gender_raw = str(row.get("usr_gndr", "M")).strip().upper()
+            gender = "여성" if gender_raw == "F" else "남성"
+
+            # 개인 행동 점수로 클러스터 값에 약간의 변동 추가 (±10 범위)
+            retention = float(row.get("retention_score", 0.7))
+            purchase_intent = round(
+                float(cluster_persona.get("purchase_intent", 70)) * (0.9 + retention * 0.2), 1
+            )
+            brand_attitude = round(
+                float(cluster_persona.get("brand_attitude", 70)) * (0.9 + retention * 0.2), 1
+            )
+
+            individual_personas.append({
+                "persona_name": f"{cluster_persona['persona_name']} #{n}",
+                "persona_name_en": cluster_persona.get("persona_name_en", ""),
+                "age_range": str(age),
+                "gender": gender,
+                "description": cluster_persona.get("description", ""),
+                "key_characteristics": cluster_persona.get("key_characteristics", []),
+                "purchase_intent": min(purchase_intent, 100.0),
+                "brand_attitude": min(brand_attitude, 100.0),
+                "marketing_acceptance": float(cluster_persona.get("marketing_acceptance", 70)),
+                "future_value": float(cluster_persona.get("future_value", 70)),
+                "preferred_channel": cluster_persona.get("preferred_channel", ""),
+                "keywords": cluster_persona.get("keywords", []),
+                "interests": cluster_persona.get("interests", []),
+                "segment_tags": cluster_persona.get("segment_tags", []),
+                "individual_stories": [],
+            })
+
+        logger.info("Built %d individual personas from parquet", len(individual_personas))
+        return individual_personas
+
+    except Exception as exc:
+        logger.warning("Failed to build individual personas from parquet: %s", exc)
+        return []
+
+
+def import_excel_as_personas(project_id: str, overwrite: bool = True) -> dict[str, Any]:
+    """Excel 실제 고객 데이터를 읽어서 DB에 페르소나로 저장."""
+    import math
+
+    try:
+        import pandas as pd  # noqa: PLC0415
+    except ImportError as exc:
+        raise RuntimeError("pandas is required") from exc
+
+    excel_path = Path(settings.AI_EXCEL_MOUNT_PATH)
+    if not excel_path.exists():
+        raise FileNotFoundError(f"Excel file not found: {excel_path}")
+
+    xl = pd.ExcelFile(str(excel_path))
+
+    demo = xl.parse("Demo", header=1)
+    clv = xl.parse("CLV", header=1)
+    interests_df = xl.parse("관심사", header=1)
+
+    # 고객별 관심사 top3 집계
+    interests_map: dict[int, list[str]] = {}
+    for _, row in interests_df.iterrows():
+        idx = int(row["index"])
+        score = float(row.get("INTEREST_SCORE", 0) or 0)
+        cat = str(row.get("category", "")).strip()
+        if cat:
+            interests_map.setdefault(idx, [])
+            interests_map[idx].append((score, cat))
+    top_interests: dict[int, list[str]] = {
+        idx: [c for _, c in sorted(cats, reverse=True)[:5]]
+        for idx, cats in interests_map.items()
+    }
+
+    # Demo + CLV merge on index
+    merged = demo.merge(clv, on="index", how="left", suffixes=("", "_clv"))
+
+    # LTV 정규화를 위한 최대값
+    ltv_max = float(merged["ltv_r"].max()) if "ltv_r" in merged.columns else 1.0
+    val_max = float(merged["val_p"].max()) if "val_p" in merged.columns else 1.0
+
+    personas: list[dict] = []
+    for _, row in merged.iterrows():
+        idx = int(row["index"])
+        age = int(row.get("usr_age") or row.get("age") or 30)
+        gndr = str(row.get("usr_gndr") or row.get("gender") or "M").strip().upper()
+        gender = "여성" if gndr == "F" else "남성"
+        region = str(row.get("usr_cnty_ap2", "") or "").strip()
+        activeness = str(row.get("sa_activeness", "") or "").strip()
+
+        # voyager_segment → segment / keywords
+        seg_raw = row.get("voyager_segment", "")
+        if isinstance(seg_raw, list):
+            segments = [str(s).replace("np.str_('", "").replace("')", "").strip() for s in seg_raw]
+        else:
+            seg_str = str(seg_raw or "")
+            segments = [s.strip().strip("'\"") for s in seg_str.strip("[]").split(",") if s.strip()] if seg_str else []
+        segments = [s for s in segments if s and s != "nan"]
+        primary_segment = segments[0] if segments else "General"
+
+        # 점수 계산
+        retention = float(row.get("retention_score") or 0.7)
+        ltv = float(row.get("ltv_r") or 0)
+        val = float(row.get("val_p") or 0)
+        purchase_intent = round(min(retention * 100, 100), 1)
+        brand_attitude = round(min(retention * 100, 100), 1)
+        future_value = round(min((ltv / ltv_max) * 100, 100), 1) if ltv_max > 0 else 50.0
+        marketing_acceptance = round(min((val / val_max) * 100, 100), 1) if val_max > 0 else 50.0
+
+        product = str(row.get("product_mapping4", "") or "").strip()
+        pchs_cnt = int(row.get("pchs_cnt") or 0)
+
+        user_interests = top_interests.get(idx, [])
+
+        personas.append({
+            "persona_name": f"고객 #{idx:04d}",
+            "persona_name_en": f"Customer #{idx:04d}",
+            "age_range": str(age),
+            "gender": gender,
+            "description": f"{age}세 {gender} | {activeness} | {region}",
+            "key_characteristics": [activeness] if activeness else [],
+            "purchase_intent": purchase_intent,
+            "brand_attitude": brand_attitude,
+            "marketing_acceptance": marketing_acceptance,
+            "future_value": future_value,
+            "preferred_channel": "",
+            "keywords": segments,
+            "interests": user_interests,
+            "segment_tags": [region] if region else [],
+            "individual_stories": [],
+            "purchase_history_hint": product,
+            "purchase_count": pchs_cnt,
+        })
+
+    saved = store.replace_personas(project_id, personas, overwrite_existing=overwrite)
+    return {
+        "resource": "personas",
+        "project_id": project_id,
+        "persona_count": len(saved),
+        "source": "excel",
     }
 
 

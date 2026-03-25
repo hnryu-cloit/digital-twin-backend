@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     AI_PIPELINE_PROJECT_DIR: str = "digital-twin-ai"
     AI_PIPELINE_OUTPUT_DIR: str = "output"
     AI_PIPELINE_EXCEL_PATH: str = "data/Digital Customer Twin.xlsx"
+    AI_EXCEL_MOUNT_PATH: str = "/ai/output/../data/Digital Customer Twin.xlsx"
     AI_SERVICE_BASE_URL: str = "http://localhost:8001"
     AI_SERVICE_TIMEOUT_SECONDS: float = 300.0
     CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000"

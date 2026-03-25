@@ -12,7 +12,7 @@ from app.schemas.persona import (
     PersonaPoolCreateRequest,
     PersonaResponse,
 )
-from app.services.ai_pipeline_service import run_persona_generation_pipeline
+from app.services.ai_pipeline_service import import_excel_as_personas, run_persona_generation_pipeline
 from app.services.db_store import store
 
 router = APIRouter(prefix="/personas", tags=["personas"])
@@ -82,9 +82,9 @@ async def create_persona_pool(body: PersonaPoolCreateRequest, _: str = Depends(g
 
 @router.get("", response_model=PersonaListResponse)
 async def list_personas(
-    project_id: str,
+    project_id: Optional[str] = None,
     page: int = Query(default=1, ge=1),
-    size: int = Query(default=12, ge=1, le=100),
+    size: int = Query(default=50, ge=1, le=2000),
     view_mode: str = Query(default="card"),
     search: Optional[str] = None,
     segments: list[str] = Query(default=[]),
@@ -105,6 +105,21 @@ async def list_personas(
         total=len(personas),
         view_mode=view_mode,
     )
+
+
+@router.post("/import-excel", status_code=status.HTTP_200_OK)
+async def import_personas_from_excel(
+    project_id: str,
+    overwrite: bool = True,
+    _: str = Depends(get_current_user_id),
+):
+    try:
+        result = import_excel_as_personas(project_id, overwrite=overwrite)
+        return result
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
 
 @router.get("/{persona_id}", response_model=PersonaDetailResponse)
