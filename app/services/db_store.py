@@ -37,13 +37,20 @@ engine = create_engine(_db_url, connect_args={"check_same_thread": False}, echo=
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
-def init_db() -> None:
-    """Create all tables. Called on app startup."""
-    Base.metadata.create_all(bind=engine)
+def _run_sqlite_migrations() -> None:
     if _db_url.startswith("sqlite"):
         sqlite_path = _db_url.replace("sqlite:///", "", 1)
         ensure_sqlite_persona_dimensions(sqlite_path)
         ensure_sqlite_survey_question_metadata(sqlite_path)
+
+
+_run_sqlite_migrations()
+
+
+def init_db() -> None:
+    """Create all tables. Called on app startup."""
+    Base.metadata.create_all(bind=engine)
+    _run_sqlite_migrations()
     _seed_admin()
 
 

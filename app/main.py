@@ -23,6 +23,8 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s request_id=%(request_id)s",
 )
 logging.getLogger().addFilter(RequestContextFilter())
+for handler in logging.getLogger().handlers:
+    handler.addFilter(RequestContextFilter())
 
 app = FastAPI(title=settings.APP_NAME, version="0.1.0")
 
