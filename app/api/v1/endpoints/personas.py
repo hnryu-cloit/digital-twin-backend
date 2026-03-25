@@ -30,7 +30,8 @@ def _run_generate_persona_job(job_id: str) -> None:
         started_at=datetime.now(timezone.utc),
     )
     try:
-        result_ref = run_persona_generation_pipeline(job["project_id"], job.get("payload", {}))
+        payload = {**(job.get("payload", {}) or {}), "job_id": job_id}
+        result_ref = run_persona_generation_pipeline(job["project_id"], payload)
         latest_job = store.get_ai_job(job_id)
         if latest_job and latest_job["status"] == "cancelled":
             return

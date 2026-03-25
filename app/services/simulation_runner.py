@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import logging
-import random
 import re
 import uuid
 from typing import Optional, Union
@@ -79,6 +78,42 @@ def _fallback_response(persona: dict, question: dict) -> dict:
     }
 
 
+def _compute_integrity_score(persona: dict, question: dict, generated: dict) -> float:
+    score = 72.0
+    options = question.get("options") or []
+    selected_option = str(generated.get("selected_option", ""))
+    rationale = str(generated.get("rationale", "")).strip()
+    cot = generated.get("cot") if isinstance(generated.get("cot"), list) else []
+
+    if not options or selected_option in options:
+        score += 8.0
+    if len(rationale) >= 40:
+        score += 8.0
+    elif rationale:
+        score += 4.0
+    if len(cot) >= 3:
+        score += 8.0
+    elif len(cot) >= 1:
+        score += 4.0
+
+    keyword_hits = 0
+    rationale_lower = rationale.lower()
+    for keyword in persona.get("keywords", [])[:3]:
+        if keyword and keyword.lower() in rationale_lower:
+            keyword_hits += 1
+    score += min(6.0, keyword_hits * 3.0)
+
+    intent = float(persona.get("purchase_intent", 50))
+    negative_options = {"전혀 아니다", "아니다", "매우 부정적", "부정적", "하락"}
+    positive_options = {"매우 그렇다", "그렇다", "매우 긍정적", "긍정적", "매우 상승", "상승"}
+    if selected_option in positive_options and intent >= 60:
+        score += 4.0
+    elif selected_option in negative_options and intent <= 45:
+        score += 4.0
+
+    return round(min(99.0, score), 1)
+
+
 def run_simulation_batch(project_id: str) -> None:
     """FastAPI BackgroundTasks로 실행. 페르소나×문항 미완료 콤보에서 BATCH_SIZE개 응답 생성."""
     pending = store.get_pending_simulation_pairs(project_id)
@@ -104,7 +139,7 @@ def run_simulation_batch(project_id: str) -> None:
         if generated is None:
             generated = _fallback_response(persona, question)
 
-        integrity = round(random.uniform(88.0, 99.2), 1)
+        integrity = _compute_integrity_score(persona, question, generated)
         store.add_simulation_response(project_id, {
             "id": f"resp-{uuid.uuid4().hex[:8]}",
             "persona_name": persona["name"],

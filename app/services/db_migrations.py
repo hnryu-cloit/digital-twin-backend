@@ -12,6 +12,12 @@ PERSONA_COLUMN_DEFS: dict[str, str] = {
     "product_group": "VARCHAR DEFAULT ''",
 }
 
+SURVEY_QUESTION_COLUMN_DEFS: dict[str, str] = {
+    "generation_source": "VARCHAR DEFAULT ''",
+    "ai_rationale": "TEXT DEFAULT ''",
+    "ai_evidence": "JSON DEFAULT '[]'",
+}
+
 
 def _derive_occupation_category(occupation: str, age: int) -> str:
     occupation_lower = (occupation or "").lower()
@@ -130,3 +136,27 @@ def ensure_sqlite_persona_dimensions(db_path: str | Path) -> bool:
 
         conn.commit()
         return added or bool(rows)
+
+
+def ensure_sqlite_survey_question_metadata(db_path: str | Path) -> bool:
+    path = Path(db_path)
+    if not path.exists():
+        return False
+
+    with sqlite3.connect(path) as conn:
+        cursor = conn.cursor()
+        columns = {
+            row[1]
+            for row in cursor.execute("PRAGMA table_info(survey_questions)").fetchall()
+        }
+        if not columns:
+            return False
+
+        added = False
+        for column_name, definition in SURVEY_QUESTION_COLUMN_DEFS.items():
+            if column_name not in columns:
+                cursor.execute(f"ALTER TABLE survey_questions ADD COLUMN {column_name} {definition}")
+                added = True
+
+        conn.commit()
+        return added

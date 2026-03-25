@@ -347,9 +347,11 @@ async def replace_questions(
 
     existing = store.list_survey_questions(project_id)
     existing_ids = [item["id"] for item in existing]
+    existing_map = {item["id"]: item for item in existing}
     persisted = []
     for index, question in enumerate(body.questions, start=1):
         question_id = existing_ids[index - 1] if index - 1 < len(existing_ids) else f"q-{uuid.uuid4().hex[:8]}"
+        previous = existing_map.get(question_id, {})
         persisted.append(
             {
                 "id": question_id,
@@ -358,6 +360,9 @@ async def replace_questions(
                 "options": question.options,
                 "order": index,
                 "status": "draft",
+                "generation_source": previous.get("generation_source", ""),
+                "ai_rationale": previous.get("ai_rationale", ""),
+                "ai_evidence": previous.get("ai_evidence", []),
             }
         )
 

@@ -12,7 +12,7 @@ from sqlalchemy.orm import sessionmaker, Session
 from app.core.config import settings
 from app.core.defaults import DEFAULT_LLM_PARAMETERS, DEFAULT_PROMPTS
 from app.core.security import hash_password
-from app.services.db_migrations import ensure_sqlite_persona_dimensions
+from app.services.db_migrations import ensure_sqlite_persona_dimensions, ensure_sqlite_survey_question_metadata
 from app.services.db_models import (
     AIJobModel,
     Base,
@@ -43,6 +43,7 @@ def init_db() -> None:
     if _db_url.startswith("sqlite"):
         sqlite_path = _db_url.replace("sqlite:///", "", 1)
         ensure_sqlite_persona_dimensions(sqlite_path)
+        ensure_sqlite_survey_question_metadata(sqlite_path)
     _seed_admin()
 
 
@@ -448,6 +449,9 @@ class DbStore:
                         options=question.get("options", []),
                         order=index,
                         status=question.get("status", "draft"),
+                        generation_source=question.get("generation_source", ""),
+                        ai_rationale=question.get("ai_rationale", ""),
+                        ai_evidence=question.get("ai_evidence", []),
                     )
                 )
             proj = session.query(ProjectModel).filter_by(id=project_id).first()

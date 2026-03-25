@@ -139,6 +139,9 @@ class SurveyQuestionModel(Base):
     options = Column(JSON, default=list)
     order = Column(Integer, default=0)
     status = Column(String, default="draft")
+    generation_source = Column(String, default="")
+    ai_rationale = Column(Text, default="")
+    ai_evidence = Column(JSON, default=list)
 
     def to_dict(self) -> dict:
         return {
@@ -149,6 +152,9 @@ class SurveyQuestionModel(Base):
             "options": self.options or [],
             "order": self.order,
             "status": self.status,
+            "generation_source": self.generation_source or "",
+            "ai_rationale": self.ai_rationale or "",
+            "ai_evidence": self.ai_evidence or [],
         }
 
 
