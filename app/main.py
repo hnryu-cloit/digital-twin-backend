@@ -1,11 +1,28 @@
+import logging
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.v1.router import router
 from app.core.config import settings
+from app.middleware.request_logging import RequestLoggingMiddleware
 from app.schemas.common import ErrorResponse, HealthStatusResponse
 from app.services.db_store import init_db
+
+
+class RequestContextFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not hasattr(record, "request_id"):
+            record.request_id = "-"
+        return True
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s request_id=%(request_id)s",
+)
+logging.getLogger().addFilter(RequestContextFilter())
 
 app = FastAPI(title=settings.APP_NAME, version="0.1.0")
 
@@ -21,6 +38,7 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Accept"],
 )
+app.add_middleware(RequestLoggingMiddleware)
 
 
 @app.exception_handler(HTTPException)
